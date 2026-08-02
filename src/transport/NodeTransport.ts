@@ -4,33 +4,54 @@ import { MidiPortInfo } from '../types.js';
 import { DEFAULT_INPUT_PORT_NAME, DEFAULT_OUTPUT_PORT_NAME } from '../constants.js';
 
 export class NodeTransport extends BaseTransport {
-  private input: Input;
-  private output: Output;
+  private input: Input | null = null;
+  private output: Output | null = null;
 
   constructor() {
     super();
-    this.input = new Input();
-    this.output = new Output();
-    // Do not ignore SysEx, timing, or active sensing
-    this.input.ignoreTypes(false, false, false);
+  }
+
+  private getInput(): Input {
+    if (!this.input) {
+      this.input = new Input();
+      this.input.ignoreTypes(false, false, false);
+    }
+    return this.input;
+  }
+
+  private getOutput(): Output {
+    if (!this.output) {
+      this.output = new Output();
+    }
+    return this.output;
   }
 
   public listInputPorts(): MidiPortInfo[] {
-    const ports: MidiPortInfo[] = [];
-    const count = this.input.getPortCount();
-    for (let i = 0; i < count; i++) {
-      ports.push({ index: i, name: this.input.getPortName(i) });
+    try {
+      const input = this.getInput();
+      const ports: MidiPortInfo[] = [];
+      const count = input.getPortCount();
+      for (let i = 0; i < count; i++) {
+        ports.push({ index: i, name: input.getPortName(i) });
+      }
+      return ports;
+    } catch {
+      return [];
     }
-    return ports;
   }
 
   public listOutputPorts(): MidiPortInfo[] {
-    const ports: MidiPortInfo[] = [];
-    const count = this.output.getPortCount();
-    for (let i = 0; i < count; i++) {
-      ports.push({ index: i, name: this.output.getPortName(i) });
+    try {
+      const output = this.getOutput();
+      const ports: MidiPortInfo[] = [];
+      const count = output.getPortCount();
+      for (let i = 0; i < count; i++) {
+        ports.push({ index: i, name: output.getPortName(i) });
+      }
+      return ports;
+    } catch {
+      return [];
     }
-    return ports;
   }
 
   public async connect(
@@ -40,6 +61,9 @@ export class NodeTransport extends BaseTransport {
     if (this.isConnected) {
       await this.disconnect();
     }
+
+    const input = this.getInput();
+    const output = this.getOutput();
 
     const inPort = this.findPortIndex(this.listInputPorts(), inputPortIndexOrName);
     const outPort = this.findPortIndex(this.listOutputPorts(), outputPortIndexOrName);
@@ -51,30 +75,34 @@ export class NodeTransport extends BaseTransport {
       throw new Error(`Output MIDI port not found matching "${outputPortIndexOrName}".`);
     }
 
-    this.input.openPort(inPort);
-    this.output.openPort(outPort);
+    input.openPort(inPort);
+    output.openPort(outPort);
     this.isConnected = true;
 
-    this.input.on('message', (deltaTime: number, message: number[]) => {
+    input.on('message', (deltaTime: number, message: number[]) => {
       this.notifyMessage(deltaTime, new Uint8Array(message));
     });
   }
 
   public async disconnect(): Promise<void> {
     if (this.isConnected) {
-      try {
-        this.input.removeAllListeners();
-        this.input.closePort();
-      } catch {}
-      try {
-        this.output.closePort();
-      } catch {}
+      if (this.input) {
+        try {
+          this.input.removeAllListeners();
+          this.input.closePort();
+        } catch {}
+      }
+      if (this.output) {
+        try {
+          this.output.closePort();
+        } catch {}
+      }
       this.isConnected = false;
     }
   }
 
   public send(message: Uint8Array | number[]): void {
-    if (!this.isConnected) {
+    if (!this.isConnected || !this.output) {
       throw new Error('Cannot send MIDI message: Transport is not connected.');
     }
     const arr = message instanceof Uint8Array ? Array.from(message) : message;

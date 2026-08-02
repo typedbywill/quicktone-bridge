@@ -65,7 +65,9 @@ export async function createConnectedClient(options: NuxClientOptions = {}): Pro
   let connected = false;
 
   try {
-    await client.connect();
+    const connectPromise = client.connect();
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Connection attempt timed out')), 2000));
+    await Promise.race([connectPromise, timeoutPromise]);
     connected = true;
   } catch (err: any) {
     connected = false;
@@ -84,7 +86,7 @@ export async function requireConnection(options: NuxClientOptions = {}): Promise
     console.error('Please ensure the device is powered on and connected via USB MIDI.\n');
     console.error('Available MIDI Input Ports:', client.listInputPorts().map(p => p.name).join(', ') || 'None');
     console.error('Available MIDI Output Ports:', client.listOutputPorts().map(p => p.name).join(', ') || 'None');
-    process.exit(1);
+    await finishCommand(client, 1);
   }
   return client;
 }
