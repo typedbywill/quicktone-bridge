@@ -11,9 +11,11 @@ export enum SysExCommand {
   HANDSHAKE_PATCH_DUMP = 0x0A,
   REALTIME_PARAM_CHANGE = 0x01,
   BLOCK_TOGGLE = 0x02,
+  MODEL_SELECT = 0x03,
   SYSTEM_VOL_GLOBAL = 0x03,
   HARDWARE_INFO_1 = 0x04,
   HARDWARE_INFO_2 = 0x05,
+  SAVE_PATCH = 0x0B,
   HEARTBEAT_PING = 0x0E,
   SIGNAL_CHAIN_ROUTING = 0x0F,
   GLOBAL_EQ_SETUP = 0x14,
@@ -86,6 +88,10 @@ export interface NuxClientEvents {
   presetChanged: (preset: PresetInfo) => void;
   expressionPedal: (val: number) => void;
   heartbeat: () => void;
+  blockToggled: (data: { block: BlockType; enabled: boolean }) => void;
+  modelChanged: (data: { block: BlockType; modelId: number }) => void;
+  paramChanged: (data: { block: BlockType; paramId: number; value: number }) => void;
+  patchSaved: (data: { presetName: string; index: number }) => void;
   sysex: (packet: SysExPacket) => void;
   error: (err: Error) => void;
 }

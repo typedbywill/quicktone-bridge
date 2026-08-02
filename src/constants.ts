@@ -2,6 +2,8 @@
  * NUX MG-30 Protocol Constants
  */
 
+import { BlockType } from './types.js';
+
 export const NUX_SYSEX_HEADER = [0xF0, 0x43, 0x58, 0x70] as const;
 export const SYSEX_END = 0xF7;
 
@@ -19,20 +21,42 @@ export const CC_MAPPINGS = {
 } as const;
 
 /**
- * Block types in signal routing order
+ * Block types in signal routing order & index mapping (0..9)
  */
-export const BLOCK_LIST = [
-  'WAH',
-  'CMP',
-  'EFX',
-  'AMP',
-  'EQ',
-  'NG',
-  'MOD',
-  'DLY',
-  'RVB',
-  'CAB'
-] as const;
+export const BLOCK_LIST: BlockType[] = [
+  'WAH', // 0
+  'CMP', // 1
+  'EFX', // 2
+  'AMP', // 3
+  'EQ',  // 4
+  'NG',  // 5
+  'MOD', // 6
+  'DLY', // 7
+  'RVB', // 8
+  'CAB'  // 9
+];
+
+export function blockTypeToId(block: BlockType | number): number {
+  if (typeof block === 'number') {
+    if (block < 0 || block > 9) {
+      throw new Error(`Invalid block ID ${block}. Expected number between 0 and 9.`);
+    }
+    return block;
+  }
+  const idx = BLOCK_LIST.indexOf(block.toUpperCase() as BlockType);
+  if (idx === -1) {
+    throw new Error(`Unknown block name "${block}". Expected one of: ${BLOCK_LIST.join(', ')}.`);
+  }
+  return idx;
+}
+
+export function idToBlockType(id: number): BlockType {
+  const block = BLOCK_LIST[id];
+  if (!block) {
+    throw new Error(`Invalid block ID ${id}.`);
+  }
+  return block;
+}
 
 /**
  * Helper to convert 0-indexed Program Change (0..127) to MG-30 preset string (e.g. 0 -> "01A", 1 -> "01B", 4 -> "02A")

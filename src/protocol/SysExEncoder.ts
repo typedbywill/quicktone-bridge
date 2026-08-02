@@ -1,5 +1,5 @@
-import { NUX_SYSEX_HEADER, SYSEX_END } from '../constants.js';
-import { SysExCommand, SysExDirection } from '../types.js';
+import { NUX_SYSEX_HEADER, SYSEX_END, blockTypeToId, presetNameToProgramChange } from '../constants.js';
+import { SysExCommand, SysExDirection, BlockType } from '../types.js';
 
 export class SysExEncoder {
   /**
@@ -27,6 +27,39 @@ export class SysExEncoder {
    */
   public static buildPatchDumpRequest(): Uint8Array {
     return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.HANDSHAKE_PATCH_DUMP, 0x00, SYSEX_END]);
+  }
+
+  /**
+   * Toggle an effect block ON or OFF (0x02)
+   */
+  public static buildBlockToggle(block: BlockType | number, enabled: boolean): Uint8Array {
+    const blockId = blockTypeToId(block);
+    const state = enabled ? 0x01 : 0x00;
+    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.BLOCK_TOGGLE, SysExDirection.HOST_TO_DEVICE, blockId & 0x7F, state, SYSEX_END]);
+  }
+
+  /**
+   * Select an effect model for a block (0x03)
+   */
+  public static buildModelSelect(block: BlockType | number, modelId: number): Uint8Array {
+    const blockId = blockTypeToId(block);
+    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.MODEL_SELECT, SysExDirection.HOST_TO_DEVICE, blockId & 0x7F, modelId & 0x7F, SYSEX_END]);
+  }
+
+  /**
+   * Set a parameter value for a block (0x01)
+   */
+  public static buildParameterChange(block: BlockType | number, paramId: number, value: number): Uint8Array {
+    const blockId = blockTypeToId(block);
+    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.REALTIME_PARAM_CHANGE, SysExDirection.HOST_TO_DEVICE, blockId & 0x7F, paramId & 0x7F, value & 0x7F, SYSEX_END]);
+  }
+
+  /**
+   * Save current patch edits to hardware preset slot (0x0B)
+   */
+  public static buildSavePatch(preset: number | string): Uint8Array {
+    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : (preset & 0x7F);
+    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.SAVE_PATCH, SysExDirection.HOST_TO_DEVICE, pc, SYSEX_END]);
   }
 
   /**

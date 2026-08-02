@@ -21,7 +21,8 @@
     "test": "vitest run",
     "monitor": "tsx examples/monitor.ts",
     "dump": "tsx examples/dump_patch.ts",
-    "switch": "tsx examples/switch_preset.ts"
+    "switch": "tsx examples/switch_preset.ts",
+    "edit": "tsx examples/edit_effects.ts"
   },
   "keywords": [
     "nux",
@@ -36,7 +37,8 @@
   "author": "William",
   "license": "MIT",
   "dependencies": {
-    "@julusian/midi": "^3.8.0"
+    "@julusian/midi": "^3.8.0",
+    "@modelcontextprotocol/sdk": "^1.30.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",

@@ -4,8 +4,16 @@ import { WebMidiTransport } from '../transport/WebMidiTransport.js';
 import { SysExEncoder } from '../protocol/SysExEncoder.js';
 import { SysExDecoder } from '../protocol/SysExDecoder.js';
 import { PatchDecoder } from '../patch/PatchDecoder.js';
-import { programChangeToPresetName, presetNameToProgramChange, CC_MAPPINGS, DEFAULT_INPUT_PORT_NAME, DEFAULT_OUTPUT_PORT_NAME } from '../constants.js';
-import { PatchData, PresetInfo, SysExPacket, SysExCommand, NuxClientEvents } from '../types.js';
+import { 
+  programChangeToPresetName, 
+  presetNameToProgramChange, 
+  blockTypeToId, 
+  idToBlockType, 
+  CC_MAPPINGS, 
+  DEFAULT_INPUT_PORT_NAME, 
+  DEFAULT_OUTPUT_PORT_NAME 
+} from '../constants.js';
+import { PatchData, PresetInfo, BlockType, SysExPacket, SysExCommand, NuxClientEvents } from '../types.js';
 
 export interface NuxClientOptions {
   transport?: BaseTransport;
@@ -88,6 +96,54 @@ export class NuxMG30Client {
       ...programChangeToPresetName(pc)
     };
     this.emit('presetChanged', presetInfo);
+  }
+
+  /**
+   * Toggles an effect block ON or OFF (e.g. 'WAH', 'CMP', 'EFX', 'AMP', 'EQ', 'NG', 'MOD', 'DLY', 'RVB', 'CAB').
+   */
+  public setBlockState(block: BlockType | number, enabled: boolean): void {
+    const blockId = blockTypeToId(block);
+    const blockName = idToBlockType(blockId);
+    const msg = SysExEncoder.buildBlockToggle(blockId, enabled);
+    this.transport.send(msg);
+
+    this.emit('blockToggled', { block: blockName, enabled });
+  }
+
+  /**
+   * Selects an effect model for a specific block.
+   */
+  public setModel(block: BlockType | number, modelId: number): void {
+    const blockId = blockTypeToId(block);
+    const blockName = idToBlockType(blockId);
+    const msg = SysExEncoder.buildModelSelect(blockId, modelId);
+    this.transport.send(msg);
+
+    this.emit('modelChanged', { block: blockName, modelId });
+  }
+
+  /**
+   * Sets a parameter value for a block (0..127).
+   */
+  public setParameter(block: BlockType | number, paramId: number, value: number): void {
+    const blockId = blockTypeToId(block);
+    const blockName = idToBlockType(blockId);
+    const msg = SysExEncoder.buildParameterChange(blockId, paramId, value);
+    this.transport.send(msg);
+
+    this.emit('paramChanged', { block: blockName, paramId, value });
+  }
+
+  /**
+   * Saves/stores the current edited patch into target hardware preset slot.
+   */
+  public savePatch(preset: number | string = this.activePresetIndex): void {
+    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : (preset & 0x7F);
+    const presetInfo = programChangeToPresetName(pc);
+    const msg = SysExEncoder.buildSavePatch(pc);
+    this.transport.send(msg);
+
+    this.emit('patchSaved', { presetName: presetInfo.name, index: pc });
   }
 
   /**
