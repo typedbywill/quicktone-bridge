@@ -22,7 +22,13 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "nux": "tsx src/cli/index.ts",
+    "start": "node dist/cli.js",
+    "install:cli": "npm run build && npm install -g .",
+    "uninstall:cli": "npm uninstall -g quicktone-bridge",
+    "link": "npm run build && npm link",
+    "unlink": "npm unlink"
   },
   "keywords": [
     "nux",
