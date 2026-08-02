@@ -147,6 +147,39 @@ export class NuxMG30Client {
   }
 
   /**
+   * Clears/resets a preset slot to a completely clean slate (disables all effect blocks, resets AMP/CAB to clean baseline).
+   */
+  public async clearPreset(preset?: number | string, options: { keepAmpCab?: boolean } = {}): Promise<void> {
+    if (preset !== undefined) {
+      this.setPreset(preset);
+      await new Promise(r => setTimeout(r, 800));
+    }
+
+    // Disable all optional effect blocks with generous pause between messages
+    const blocksToDisable: BlockType[] = ['WAH', 'CMP', 'EFX', 'EQ', 'NG', 'MOD', 'DLY', 'RVB'];
+    for (const block of blocksToDisable) {
+      this.setBlockState(block, false);
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    if (!options.keepAmpCab) {
+      // Set AMP & CAB to clean default baseline (Class A30 Vox AC30 #7 or Deluxe Rvb #1 & 1x12 Cab #1)
+      this.setModel('AMP', 1); // Deluxe Rvb
+      await new Promise(r => setTimeout(r, 400));
+      this.setBlockState('AMP', true);
+      await new Promise(r => setTimeout(r, 400));
+      this.setModel('CAB', 1); // Black 112
+      await new Promise(r => setTimeout(r, 400));
+      this.setBlockState('CAB', true);
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    // Save cleared state to hardware memory
+    this.savePatch(preset !== undefined ? preset : this.activePresetIndex);
+    await new Promise(r => setTimeout(r, 800));
+  }
+
+  /**
    * Requests the full 222-byte patch dump from the device.
    */
   public async requestPatchDump(timeoutMs: number = 3000): Promise<PatchData> {
