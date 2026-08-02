@@ -1,0 +1,236 @@
+import { BaseTransport } from '../transport/BaseTransport.js';
+import { NodeTransport } from '../transport/NodeTransport.js';
+import { WebMidiTransport } from '../transport/WebMidiTransport.js';
+import { SysExEncoder } from '../protocol/SysExEncoder.js';
+import { SysExDecoder } from '../protocol/SysExDecoder.js';
+import { PatchDecoder } from '../patch/PatchDecoder.js';
+import { programChangeToPresetName, presetNameToProgramChange, CC_MAPPINGS, DEFAULT_INPUT_PORT_NAME, DEFAULT_OUTPUT_PORT_NAME } from '../constants.js';
+import { PatchData, PresetInfo, SysExPacket, SysExCommand, NuxClientEvents } from '../types.js';
+
+export interface NuxClientOptions {
+  transport?: BaseTransport;
+  inputPortName?: string;
+  outputPortName?: string;
+  autoHeartbeat?: boolean;
+  heartbeatIntervalMs?: number;
+}
+
+export class NuxMG30Client {
+  private transport: BaseTransport;
+  private inputPortName: string;
+  private outputPortName: string;
+  private autoHeartbeat: boolean;
+  private heartbeatIntervalMs: number;
+  private heartbeatTimer: any = null;
+  private activePresetIndex = 0;
+  private patchResolver: ((patch: PatchData) => void) | null = null;
+
+  private eventListeners: { [K in keyof NuxClientEvents]?: Function[] } = {};
+
+  constructor(options: NuxClientOptions = {}) {
+    if (options.transport) {
+      this.transport = options.transport;
+    } else {
+      // Auto-detect environment
+      if (typeof window !== 'undefined' && typeof (navigator as any)?.requestMIDIAccess !== 'undefined') {
+        this.transport = new WebMidiTransport();
+      } else {
+        this.transport = new NodeTransport();
+      }
+    }
+
+    this.inputPortName = options.inputPortName || DEFAULT_INPUT_PORT_NAME;
+    this.outputPortName = options.outputPortName || DEFAULT_OUTPUT_PORT_NAME;
+    this.autoHeartbeat = options.autoHeartbeat ?? false;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs || 5000;
+
+    this.transport.onMessage(this.handleMidiMessage.bind(this));
+  }
+
+  /**
+   * Connects to the NUX MG-30 device via MIDI.
+   */
+  public async connect(): Promise<void> {
+    await this.transport.connect(this.inputPortName, this.outputPortName);
+    this.emit('connected', { inputPort: this.inputPortName, outputPort: this.outputPortName });
+
+    if (this.autoHeartbeat) {
+      this.startHeartbeatTimer();
+    }
+  }
+
+  /**
+   * Disconnects from the NUX MG-30 device.
+   */
+  public async disconnect(): Promise<void> {
+    this.stopHeartbeatTimer();
+    await this.transport.disconnect();
+    this.emit('disconnected');
+  }
+
+  /**
+   * Switches to a specific preset by 0-indexed integer (0..127) or string name (e.g. "01A", "05C").
+   */
+  public setPreset(preset: number | string): void {
+    let pc: number;
+    if (typeof preset === 'string') {
+      pc = presetNameToProgramChange(preset);
+    } else {
+      pc = preset & 0x7F;
+    }
+
+    this.activePresetIndex = pc;
+    const msg = SysExEncoder.buildProgramChange(pc);
+    this.transport.send(msg);
+
+    const presetInfo: PresetInfo = {
+      index: pc,
+      ...programChangeToPresetName(pc)
+    };
+    this.emit('presetChanged', presetInfo);
+  }
+
+  /**
+   * Requests the full 222-byte patch dump from the device.
+   */
+  public async requestPatchDump(timeoutMs: number = 3000): Promise<PatchData> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.patchResolver = null;
+        reject(new Error(`Timed out waiting for NUX MG-30 patch dump response after ${timeoutMs}ms.`));
+      }, timeoutMs);
+
+      this.patchResolver = (patch: PatchData) => {
+        clearTimeout(timer);
+        resolve(patch);
+      };
+
+      const req = SysExEncoder.buildPatchDumpRequest();
+      this.transport.send(req);
+    });
+  }
+
+  /**
+   * Sends a heartbeat ping message (0x0E) to verify device responsiveness.
+   */
+  public sendHeartbeat(): void {
+    const ping = SysExEncoder.buildHeartbeatPing();
+    this.transport.send(ping);
+  }
+
+  /**
+   * Sends a custom Control Change message.
+   */
+  public sendCC(ccNumber: number, value: number): void {
+    const cc = SysExEncoder.buildControlChange(ccNumber, value);
+    this.transport.send(cc);
+  }
+
+  /**
+   * Gets the list of available input MIDI ports.
+   */
+  public listInputPorts() {
+    return this.transport.listInputPorts();
+  }
+
+  /**
+   * Gets the list of available output MIDI ports.
+   */
+  public listOutputPorts() {
+    return this.transport.listOutputPorts();
+  }
+
+  /**
+   * Attach event listener
+   */
+  public on<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
+    if (!this.eventListeners[event]) {
+      this.eventListeners[event] = [];
+    }
+    this.eventListeners[event]!.push(listener as Function);
+    return this;
+  }
+
+  /**
+   * Remove event listener
+   */
+  public off<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
+    if (this.eventListeners[event]) {
+      this.eventListeners[event] = this.eventListeners[event]!.filter(l => l !== listener);
+    }
+    return this;
+  }
+
+  private emit<K extends keyof NuxClientEvents>(event: K, ...args: Parameters<NuxClientEvents[K]>): void {
+    const listeners = this.eventListeners[event];
+    if (listeners) {
+      for (const listener of listeners) {
+        try {
+          listener(...args);
+        } catch (err) {
+          console.error(`Error in event listener for "${event}":`, err);
+        }
+      }
+    }
+  }
+
+  private handleMidiMessage(deltaTime: number, message: Uint8Array): void {
+    // 1. Check for SysEx
+    const packet = SysExDecoder.parseSysEx(message);
+    if (packet) {
+      this.emit('sysex', packet);
+
+      if (packet.command === SysExCommand.HANDSHAKE_PATCH_DUMP) {
+        const patch = PatchDecoder.decode(packet.payload);
+        const presetInfo = programChangeToPresetName(this.activePresetIndex);
+        patch.presetName = presetInfo.name;
+
+        this.emit('patchReceived', patch);
+        if (this.patchResolver) {
+          this.patchResolver(patch);
+          this.patchResolver = null;
+        }
+      } else if (packet.command === SysExCommand.HEARTBEAT_PING) {
+        this.emit('heartbeat');
+      }
+      return;
+    }
+
+    // 2. Check for Program Change (PC)
+    if (SysExDecoder.isProgramChange(message)) {
+      const pc = message[1] & 0x7F;
+      this.activePresetIndex = pc;
+      const info: PresetInfo = {
+        index: pc,
+        ...programChangeToPresetName(pc)
+      };
+      this.emit('presetChanged', info);
+      return;
+    }
+
+    // 3. Check for Control Change (CC)
+    if (SysExDecoder.isControlChange(message)) {
+      const ccNum = message[1] & 0x7F;
+      const ccVal = message[2] & 0x7F;
+      if (ccNum === CC_MAPPINGS.EXPRESSION_PEDAL) {
+        this.emit('expressionPedal', ccVal);
+      }
+    }
+  }
+
+  private startHeartbeatTimer(): void {
+    this.stopHeartbeatTimer();
+    this.heartbeatTimer = setInterval(() => {
+      if (this.transport.getIsConnected()) {
+        this.sendHeartbeat();
+      }
+    }, this.heartbeatIntervalMs);
+  }
+
+  private stopHeartbeatTimer(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+}

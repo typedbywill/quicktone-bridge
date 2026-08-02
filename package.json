@@ -1,0 +1,48 @@
+{
+  "name": "quicktone-bridge",
+  "version": "1.0.0",
+  "description": "TypeScript Library and Bridge for NUX MG-30 Multi-Effects Processor",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "monitor": "tsx examples/monitor.ts",
+    "dump": "tsx examples/dump_patch.ts",
+    "switch": "tsx examples/switch_preset.ts"
+  },
+  "keywords": [
+    "nux",
+    "mg30",
+    "mg-30",
+    "quicktone",
+    "midi",
+    "sysex",
+    "guitar-effects",
+    "webmidi"
+  ],
+  "author": "William",
+  "license": "MIT",
+  "dependencies": {
+    "@julusian/midi": "^3.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
