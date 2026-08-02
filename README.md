@@ -1,11 +1,12 @@
 # 🎸 quicktone-bridge
 
-> A fully-typed TypeScript library and bridge to reverse-engineer, control, and configure the **NUX MG-30** multi-effects processor via USB MIDI & SysEx. Supports both **Node.js** and **Browser (WebMIDI)** environments.
+> A fully-typed TypeScript library, bridge, and **MCP Server (Model Context Protocol)** to reverse-engineer, control, and configure the **NUX MG-30** multi-effects processor via USB MIDI & SysEx. Supports both **Node.js** and **Browser (WebMIDI)** environments.
 
 ---
 
 ## ✨ Features
 
+- 🤖 **Built-in MCP Server**: Exposes tools for AI assistants (Claude Desktop, Antigravity, Cursor) via `npx quicktone-bridge`.
 - 🔌 **Universal Compatibility**: Works seamlessly in **Node.js** (`@julusian/midi`) and **Web Browsers** (`WebMIDI API`).
 - 🎛️ **Full Preset & Patch Control**: Select presets (`01A` to `32D`), query 215+ byte active patch dumps, and save modified patches directly to hardware memory.
 - ⚡ **Real-Time Effect Editing**: Toggle effect blocks ON/OFF, select effect models, and adjust knob parameters (Gain, Bass, Treble, Time, Mix, etc.) in real time.
@@ -15,7 +16,46 @@
 
 ---
 
-## 🚀 Installation
+## 🤖 Running as an MCP Server (Model Context Protocol)
+
+You can run `quicktone-bridge` directly as an MCP Server via `npx` so AI agents can control your NUX MG-30 hardware!
+
+### Command Line Execution
+
+```bash
+npx -y quicktone-bridge
+```
+
+### Claude Desktop / MCP Configuration (`claude_desktop_config.json`)
+
+Add the following configuration to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "nux-mg30": {
+      "command": "npx",
+      "args": ["-y", "quicktone-bridge"]
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| MCP Tool Name | Description | Arguments |
+| :--- | :--- | :--- |
+| `list_midi_ports` | Lists available MIDI input & output ports | None |
+| `get_active_patch` | Queries active patch (scene, BPM, active blocks, models, chain) | None |
+| `switch_preset` | Switches pedal to preset bank | `preset` (e.g. `"01A"`, `"02B"`) |
+| `toggle_effect_block` | Toggles an effect block ON or OFF | `block` (`"EFX"`, `"AMP"`, etc.), `enabled` (bool) |
+| `set_effect_model` | Changes model index for a block | `block`, `modelId` (number) |
+| `set_parameter` | Tweaks knob value in real time | `block`, `paramId` (0=Gain/Time), `value` (0..127) |
+| `save_patch` | Saves current edits to hardware memory | `preset` (optional) |
+
+---
+
+## 🚀 Library Installation
 
 ```bash
 npm install quicktone-bridge
@@ -23,7 +63,7 @@ npm install quicktone-bridge
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Quick Start (TypeScript / JavaScript)
 
 ```typescript
 import { NuxMG30Client } from 'quicktone-bridge';
@@ -132,24 +172,14 @@ const client = new NuxMG30Client({
 - `listInputPorts(): MidiPortInfo[]`: Lists available input MIDI ports.
 - `listOutputPorts(): MidiPortInfo[]`: Lists available output MIDI ports.
 
-#### Events
-
-- `client.on('connected', ({ inputPort, outputPort }) => ...)`
-- `client.on('presetChanged', (preset: PresetInfo) => ...)`
-- `client.on('patchReceived', (patch: PatchData) => ...)`
-- `client.on('blockToggled', ({ block, enabled }) => ...)`
-- `client.on('modelChanged', ({ block, modelId }) => ...)`
-- `client.on('paramChanged', ({ block, paramId, value }) => ...)`
-- `client.on('expressionPedal', (value: number) => ...)`
-- `client.on('sysex', (packet: SysExPacket) => ...)`
-
 ---
 
 ## 🛠️ CLI Utilities & NPM Scripts
 
-This package comes with ready-to-use CLI scripts:
-
 ```bash
+# Run local MCP Server
+npm run start:mcp
+
 # Fetch and print active patch dump from connected hardware
 npm run dump
 
@@ -165,7 +195,7 @@ npm run monitor
 # Run unit test suite
 npm test
 
-# Build distribution bundle (dist/ index.js, index.mjs, index.d.ts)
+# Build distribution bundle (dist/ index.js, mcp.js, index.d.ts)
 npm run build
 ```
 

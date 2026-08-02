@@ -1,10 +1,14 @@
 {
   "name": "quicktone-bridge",
   "version": "1.0.0",
-  "description": "TypeScript Library and Bridge for NUX MG-30 Multi-Effects Processor",
+  "description": "TypeScript Library, Bridge and MCP Server for NUX MG-30 Multi-Effects Processor",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "quicktone-bridge": "./dist/mcp.js",
+    "quicktone-mcp": "./dist/mcp.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -18,6 +22,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "start:mcp": "node dist/mcp.js",
     "test": "vitest run",
     "monitor": "tsx examples/monitor.ts",
     "dump": "tsx examples/dump_patch.ts",
@@ -29,6 +34,8 @@
     "mg30",
     "mg-30",
     "quicktone",
+    "mcp",
+    "mcp-server",
     "midi",
     "sysex",
     "guitar-effects",
@@ -38,7 +45,8 @@
   "license": "MIT",
   "dependencies": {
     "@julusian/midi": "^3.8.0",
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.2.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
