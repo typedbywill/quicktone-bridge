@@ -99,6 +99,41 @@ export class NuxMG30Client {
   }
 
   /**
+   * Returns current active preset 0-indexed position (0..127).
+   */
+  public getActivePresetIndex(): number {
+    return this.activePresetIndex;
+  }
+
+  /**
+   * Returns current active preset information.
+   */
+  public getActivePresetInfo(): PresetInfo {
+    return {
+      index: this.activePresetIndex,
+      ...programChangeToPresetName(this.activePresetIndex)
+    };
+  }
+
+  /**
+   * Advances to the next preset (or by specified step count).
+   */
+  public presetUp(step: number = 1): PresetInfo {
+    const nextPc = (this.activePresetIndex + step + 128 * Math.ceil(Math.abs(step))) % 128;
+    this.setPreset(nextPc);
+    return this.getActivePresetInfo();
+  }
+
+  /**
+   * Recedes to the previous preset (or by specified step count).
+   */
+  public presetDown(step: number = 1): PresetInfo {
+    const prevPc = (this.activePresetIndex - step + 128 * Math.ceil(Math.abs(step))) % 128;
+    this.setPreset(prevPc);
+    return this.getActivePresetInfo();
+  }
+
+  /**
    * Toggles an effect block ON or OFF (e.g. 'WAH', 'CMP', 'EFX', 'AMP', 'EQ', 'NG', 'MOD', 'DLY', 'RVB', 'CAB').
    */
   public setBlockState(block: BlockType | number, enabled: boolean): void {

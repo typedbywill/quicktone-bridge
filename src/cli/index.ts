@@ -159,6 +159,54 @@ presetCmd
   });
 
 presetCmd
+  .command('up [id]')
+  .description('Avança para o próximo preset (ex: 01A ➔ 01B ou a partir do preset especificado)')
+  .action(async (id?: string) => {
+    const client = await requireConnection();
+    let currentPc: number;
+    let fromName: string;
+
+    if (id) {
+      const normalized = normalizePresetId(id);
+      currentPc = normalized.pc;
+      fromName = normalized.name;
+    } else {
+      currentPc = client.getActivePresetIndex();
+      fromName = programChangeToPresetName(currentPc).name;
+    }
+
+    const nextPc = (currentPc + 1) % 128;
+    const nextInfo = programChangeToPresetName(nextPc);
+    client.setPreset(nextPc);
+    console.log(`⬆️ Preset avançado: ${fromName} ➔ ${nextInfo.name} (PC: ${nextPc})`);
+    await client.disconnect();
+  });
+
+presetCmd
+  .command('down [id]')
+  .description('Recua para o preset anterior (ex: 01B ➔ 01A ou a partir do preset especificado)')
+  .action(async (id?: string) => {
+    const client = await requireConnection();
+    let currentPc: number;
+    let fromName: string;
+
+    if (id) {
+      const normalized = normalizePresetId(id);
+      currentPc = normalized.pc;
+      fromName = normalized.name;
+    } else {
+      currentPc = client.getActivePresetIndex();
+      fromName = programChangeToPresetName(currentPc).name;
+    }
+
+    const prevPc = (currentPc - 1 + 128) % 128;
+    const prevInfo = programChangeToPresetName(prevPc);
+    client.setPreset(prevPc);
+    console.log(`⬇️ Preset recuado: ${fromName} ➔ ${prevInfo.name} (PC: ${prevPc})`);
+    await client.disconnect();
+  });
+
+presetCmd
   .command('save [id]')
   .description('Salva as alterações do patch atual no preset especificado ou atual')
   .action(async (id?: string) => {
