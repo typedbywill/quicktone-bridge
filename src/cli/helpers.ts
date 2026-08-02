@@ -1,8 +1,56 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { NuxMG30Client, NuxClientOptions } from '../client/NuxMG30Client.js';
 import { programChangeToPresetName, presetNameToProgramChange, NUX_MODEL_CATALOG, BLOCK_LIST } from '../constants.js';
 import { BlockType, PatchData } from '../types.js';
+
+const STATE_FILE_PATH = path.join(os.homedir(), '.nux-mg30-state.json');
+
+export interface NuxState {
+  currentPresetPc: number;
+  currentPresetName: string;
+  lastUpdated: string;
+}
+
+export function loadNuxState(): NuxState {
+  try {
+    if (fs.existsSync(STATE_FILE_PATH)) {
+      const content = fs.readFileSync(STATE_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (typeof parsed.currentPresetPc === 'number' && parsed.currentPresetPc >= 0 && parsed.currentPresetPc <= 127) {
+        return parsed;
+      }
+    }
+  } catch {}
+  return {
+    currentPresetPc: 0,
+    currentPresetName: '01A',
+    lastUpdated: new Date().toISOString()
+  };
+}
+
+export function saveNuxState(pc: number): void {
+  try {
+    const info = programChangeToPresetName(pc);
+    const state: NuxState = {
+      currentPresetPc: pc,
+      currentPresetName: info.name,
+      lastUpdated: new Date().toISOString()
+    };
+    fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+  } catch {}
+}
+
+export async function finishCommand(client?: NuxMG30Client, exitCode = 0): Promise<never> {
+  if (client) {
+    try {
+      await client.disconnect();
+    } catch {}
+  }
+  await new Promise(resolve => setTimeout(resolve, 50));
+  process.exit(exitCode);
+}
 
 export interface CommandContext {
   client: NuxMG30Client;

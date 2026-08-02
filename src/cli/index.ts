@@ -8,7 +8,10 @@ import {
   normalizeBlockId, 
   printCard,
   readJsonFile,
-  writeJsonFile 
+  writeJsonFile,
+  loadNuxState,
+  saveNuxState,
+  finishCommand
 } from './helpers.js';
 import { BLOCK_LIST, NUX_MODEL_CATALOG, getModelName, programChangeToPresetName } from '../constants.js';
 import { BlockType } from '../types.js';
@@ -31,13 +34,13 @@ program
     const { client, connected } = await createConnectedClient();
     if (!connected) {
       console.log('🔴 Status: Dispositivo não encontrado ou desconectado.');
-      return;
+      await finishCommand(client, 1);
     }
     const start = Date.now();
     client.sendHeartbeat();
     const elapsed = Date.now() - start;
     console.log(`🟢 Pong! NUX MG-30 respondeu em ${elapsed}ms.`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 program
@@ -53,7 +56,7 @@ program
       'Portas Entrada': inputs.map(i => i.name).join(', ') || 'Nenhuma',
       'Portas Saída': outputs.map(o => o.name).join(', ') || 'Nenhuma'
     });
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 program
@@ -67,7 +70,7 @@ program
       'Modo': 'CLI Interface',
       'Status MIDI': connected ? 'Conexão Ativa' : 'Offline / Desconectado'
     });
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 program
@@ -76,7 +79,7 @@ program
   .action(async () => {
     const client = await requireConnection();
     console.log('✅ Conexão estabelecida com sucesso com o NUX MG-30!');
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 program
@@ -84,6 +87,7 @@ program
   .description('Encerra a conexão com o dispositivo NUX MG-30')
   .action(async () => {
     console.log('🔌 Conexão MIDI encerrada.');
+    await finishCommand();
   });
 
 program
@@ -98,7 +102,7 @@ program
     } catch (err: any) {
       console.log('⚠️ Sincronização concluída (Modo emulação/sem resposta SysEx direta).');
     }
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 // ==========================================
@@ -128,6 +132,7 @@ presetCmd
     const { pc, name } = normalizePresetId(id);
     const client = await requireConnection();
     client.setPreset(pc);
+    saveNuxState(pc);
     console.log(`\n📋 Exibindo detalhes do Preset ${name} (Índice PC: ${pc})...`);
     try {
       const patch = await client.requestPatchDump(2000);
@@ -144,7 +149,7 @@ presetCmd
         'Status Hardware': 'Ativo'
       });
     }
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 presetCmd
@@ -154,13 +159,14 @@ presetCmd
     const { pc, name } = normalizePresetId(id);
     const client = await requireConnection();
     client.setPreset(pc);
+    saveNuxState(pc);
     console.log(`✅ Preset ${name} (PC: ${pc}) carregado no NUX MG-30.`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 presetCmd
   .command('up [id]')
-  .description('Avança para o próximo preset (ex: 01A ➔ 01B ou a partir do preset especificado)')
+  .description('Avança para o próximo preset no hardware (navega a partir do preset atual)')
   .action(async (id?: string) => {
     const client = await requireConnection();
     let currentPc: number;
@@ -171,20 +177,22 @@ presetCmd
       currentPc = normalized.pc;
       fromName = normalized.name;
     } else {
-      currentPc = client.getActivePresetIndex();
-      fromName = programChangeToPresetName(currentPc).name;
+      const state = loadNuxState();
+      currentPc = state.currentPresetPc;
+      fromName = state.currentPresetName;
     }
 
     const nextPc = (currentPc + 1) % 128;
     const nextInfo = programChangeToPresetName(nextPc);
     client.setPreset(nextPc);
+    saveNuxState(nextPc);
     console.log(`⬆️ Preset avançado: ${fromName} ➔ ${nextInfo.name} (PC: ${nextPc})`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 presetCmd
   .command('down [id]')
-  .description('Recua para o preset anterior (ex: 01B ➔ 01A ou a partir do preset especificado)')
+  .description('Recua para o preset anterior no hardware (navega a partir do preset atual)')
   .action(async (id?: string) => {
     const client = await requireConnection();
     let currentPc: number;
@@ -195,15 +203,17 @@ presetCmd
       currentPc = normalized.pc;
       fromName = normalized.name;
     } else {
-      currentPc = client.getActivePresetIndex();
-      fromName = programChangeToPresetName(currentPc).name;
+      const state = loadNuxState();
+      currentPc = state.currentPresetPc;
+      fromName = state.currentPresetName;
     }
 
     const prevPc = (currentPc - 1 + 128) % 128;
     const prevInfo = programChangeToPresetName(prevPc);
     client.setPreset(prevPc);
+    saveNuxState(prevPc);
     console.log(`⬇️ Preset recuado: ${fromName} ➔ ${prevInfo.name} (PC: ${prevPc})`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 presetCmd
@@ -214,12 +224,13 @@ presetCmd
     if (id) {
       const { pc, name } = normalizePresetId(id);
       client.savePatch(pc);
+      saveNuxState(pc);
       console.log(`💾 Patch salvo com sucesso no Preset ${name}.`);
     } else {
       client.savePatch();
       console.log(`💾 Patch salvo no preset ativo.`);
     }
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 presetCmd
@@ -296,6 +307,59 @@ presetCmd
     console.log(`📥 Importando preset do arquivo ${file}...`);
     const data = readJsonFile(file);
     console.log(`✅ Preset importado com sucesso!`);
+  });
+
+// Atalhos Globais Preset Up / Preset Down
+program
+  .command('preset-up [id]')
+  .description('Atalho para avançar preset (nux preset up)')
+  .action(async (id?: string) => {
+    const client = await requireConnection();
+    let currentPc: number;
+    let fromName: string;
+
+    if (id) {
+      const normalized = normalizePresetId(id);
+      currentPc = normalized.pc;
+      fromName = normalized.name;
+    } else {
+      const state = loadNuxState();
+      currentPc = state.currentPresetPc;
+      fromName = state.currentPresetName;
+    }
+
+    const nextPc = (currentPc + 1) % 128;
+    const nextInfo = programChangeToPresetName(nextPc);
+    client.setPreset(nextPc);
+    saveNuxState(nextPc);
+    console.log(`⬆️ Preset avançado: ${fromName} ➔ ${nextInfo.name} (PC: ${nextPc})`);
+    await finishCommand(client);
+  });
+
+program
+  .command('preset-down [id]')
+  .description('Atalho para recuar preset (nux preset down)')
+  .action(async (id?: string) => {
+    const client = await requireConnection();
+    let currentPc: number;
+    let fromName: string;
+
+    if (id) {
+      const normalized = normalizePresetId(id);
+      currentPc = normalized.pc;
+      fromName = normalized.name;
+    } else {
+      const state = loadNuxState();
+      currentPc = state.currentPresetPc;
+      fromName = state.currentPresetName;
+    }
+
+    const prevPc = (currentPc - 1 + 128) % 128;
+    const prevInfo = programChangeToPresetName(prevPc);
+    client.setPreset(prevPc);
+    saveNuxState(prevPc);
+    console.log(`⬇️ Preset recuado: ${fromName} ➔ ${prevInfo.name} (PC: ${prevPc})`);
+    await finishCommand(client);
   });
 
 // ==========================================
@@ -399,7 +463,7 @@ blockCmd
     const client = await requireConnection();
     client.setBlockState(block, true);
     console.log(`🟢 Bloco ${block} ativado.`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 blockCmd
@@ -410,7 +474,7 @@ blockCmd
     const client = await requireConnection();
     client.setBlockState(block, false);
     console.log(`🔴 Bloco ${block} desativado.`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 blockCmd
@@ -611,7 +675,7 @@ program
     console.log(`  [${inputs.length ? '✓' : '✗'}] Portas MIDI de Entrada: ${inputs.map(i => i.name).join(', ') || 'Nenhuma'}`);
     console.log(`  [${outputs.length ? '✓' : '✗'}] Portas MIDI de Saída: ${outputs.map(o => o.name).join(', ') || 'Nenhuma'}`);
     console.log(`  [${connected ? '✓' : '✗'}] Conexão com NUX MG-30: ${connected ? 'OK' : 'Não Detectado'}\n`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 program
@@ -634,7 +698,7 @@ program
     } catch (e) {
       console.log('⚠️ Patch dump timeout ou dispositivo offline.');
     }
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 // Parse command line arguments

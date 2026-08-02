@@ -63,6 +63,7 @@ export class NodeTransport extends BaseTransport {
   public async disconnect(): Promise<void> {
     if (this.isConnected) {
       try {
+        this.input.removeAllListeners();
         this.input.closePort();
       } catch {}
       try {
