@@ -2,6 +2,7 @@ import { Input, Output } from '@julusian/midi';
 import { BaseTransport } from './BaseTransport.js';
 import { MidiPortInfo } from '../types.js';
 import { DEFAULT_INPUT_PORT_NAME, DEFAULT_OUTPUT_PORT_NAME } from '../constants.js';
+import { findMatchingPortIndex } from '../utils/midiUtils.js';
 
 export class NodeTransport extends BaseTransport {
   private input: Input | null = null;
@@ -110,13 +111,7 @@ export class NodeTransport extends BaseTransport {
   }
 
   private findPortIndex(ports: MidiPortInfo[], identifier: number | string): number {
-    if (typeof identifier === 'number') {
-      return identifier >= 0 && identifier < ports.length ? identifier : -1;
-    }
-    const lower = identifier.toLowerCase();
-    const exact = ports.find(p => p.name.toLowerCase() === lower);
-    if (exact) return exact.index;
-    const partial = ports.find(p => p.name.toLowerCase().includes(lower));
-    return partial ? partial.index : -1;
+    return findMatchingPortIndex(ports, identifier);
   }
 }
+

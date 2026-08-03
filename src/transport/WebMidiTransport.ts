@@ -1,6 +1,7 @@
 import { BaseTransport } from './BaseTransport.js';
 import { MidiPortInfo } from '../types.js';
 import { DEFAULT_INPUT_PORT_NAME, DEFAULT_OUTPUT_PORT_NAME } from '../constants.js';
+import { findMatchingPortIndex } from '../utils/midiUtils.js';
 
 export class WebMidiTransport extends BaseTransport {
   private midiAccess: any = null;
@@ -84,12 +85,9 @@ export class WebMidiTransport extends BaseTransport {
   }
 
   private findPort(ports: any[], identifier: number | string): any {
-    if (typeof identifier === 'number') {
-      return ports[identifier] || null;
-    }
-    const lower = identifier.toLowerCase();
-    const exact = ports.find(p => (p.name || '').toLowerCase() === lower);
-    if (exact) return exact;
-    return ports.find(p => (p.name || '').toLowerCase().includes(lower)) || null;
+    const portItems = ports.map((p, index) => ({ index, name: p.name || '' }));
+    const matchIndex = findMatchingPortIndex(portItems, identifier);
+    return matchIndex !== -1 ? ports[matchIndex] : null;
   }
 }
+
