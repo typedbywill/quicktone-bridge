@@ -31,10 +31,11 @@ export class SysExEncoder {
 
   /**
    * Toggle an effect block ON or OFF using MIDI CC
+   * NUX MG-30 uses 0x00 for ON (Enabled) and 0x41 for OFF (Disabled)
    */
   public static buildBlockToggle(block: BlockType | number, enabled: boolean): Uint8Array {
     const blockId = blockTypeToId(block);
-    const value = enabled ? 0x41 : 0x00;
+    const value = enabled ? 0x00 : 0x41;
     return this.buildControlChange(blockId, value);
   }
 

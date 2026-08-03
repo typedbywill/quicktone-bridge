@@ -12,10 +12,10 @@ describe('Protocol & Conversion Tests', () => {
 
   it('should encode block toggle to MIDI CC correctly', () => {
     const modOn = SysExEncoder.buildBlockToggle('MOD', true);
-    expect(Array.from(modOn)).toEqual([0xB0, 0x06, 0x41]);
+    expect(Array.from(modOn)).toEqual([0xB0, 0x06, 0x00]);
 
     const modOff = SysExEncoder.buildBlockToggle('MOD', false);
-    expect(Array.from(modOff)).toEqual([0xB0, 0x06, 0x00]);
+    expect(Array.from(modOff)).toEqual([0xB0, 0x06, 0x41]);
   });
 
   it('should decode valid NUX SysEx packet', () => {
