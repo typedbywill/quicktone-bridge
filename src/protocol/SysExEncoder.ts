@@ -85,11 +85,12 @@ export class SysExEncoder {
   }
 
   /**
-   * Select active scene (1, 2, 3) using CC 81 (0x51)
+   * Select active scene (1, 2, 3) using MIDI CC 80 (0x50)
+   * CC 80 Value 0 = Scene 1, Value 1 = Scene 2, Value 2 = Scene 3
    */
   public static buildSceneSelect(sceneNumber: number, channel: number = 0): Uint8Array {
     const sceneVal = Math.min(2, Math.max(0, sceneNumber - 1));
-    return this.buildControlChange(0x51, sceneVal, channel);
+    return this.buildControlChange(0x50, sceneVal, channel);
   }
 
   /**

@@ -18,7 +18,7 @@ export const CC_MAPPINGS = {
   TAP_TEMPO: 0x40,        // 64
   TUNER_TOGGLE: 0x4B,     // 75
   CTRL_FOOTSWITCH: 0x50,  // 80
-  SCENE_SELECT: 0x51,     // 81 (0=Scene 1, 1=Scene 2, 2=Scene 3)
+  SCENE_SELECT: 0x50,     // 80 (0=Scene 1, 1=Scene 2, 2=Scene 3)
 } as const;
 
 /**

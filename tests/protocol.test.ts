@@ -18,6 +18,17 @@ describe('Protocol & Conversion Tests', () => {
     expect(Array.from(modOff)).toEqual([0xB0, 0x06, 0x41]);
   });
 
+  it('should encode SysEx scene select packet correctly', () => {
+    const scene1 = SysExEncoder.buildSceneSelect(1);
+    expect(Array.from(scene1)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x5B, 0x00, 0xF7]);
+
+    const scene2 = SysExEncoder.buildSceneSelect(2);
+    expect(Array.from(scene2)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x5B, 0x01, 0xF7]);
+
+    const scene3 = SysExEncoder.buildSceneSelect(3);
+    expect(Array.from(scene3)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x5B, 0x02, 0xF7]);
+  });
+
   it('should decode valid NUX SysEx packet', () => {
     const raw = [0xF0, 0x43, 0x58, 0x70, 0x0A, 0x02, 0x12, 0x34, 0xF7];
     const packet = SysExDecoder.parseSysEx(raw);

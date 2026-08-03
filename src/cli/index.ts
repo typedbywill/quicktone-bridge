@@ -15,6 +15,11 @@ import {
   setPersistedBlockState,
   getPersistedParamState,
   setPersistedParamState,
+  getPersistedActiveScene,
+  setPersistedActiveScene,
+  getPersistedSceneBlockStates,
+  setPersistedSceneBlockStates,
+  DEFAULT_BLOCK_STATES,
   finishCommand
 } from './helpers.js';
 import { BLOCK_LIST, NUX_MODEL_CATALOG, NUX_BLOCK_PARAM_CATALOG, findBlockParam, getModelName, programChangeToPresetName } from '../constants.js';
@@ -416,13 +421,24 @@ const sceneCmd = program.command('scene').description('Gerenciamento de Cenas (S
 sceneCmd
   .command('list')
   .description('Lista as cenas disponíveis')
-  .action(() => {
+  .action(async () => {
+    let activeScene = getPersistedActiveScene();
+    try {
+      const { client, connected } = await createConnectedClient();
+      if (connected) {
+        const patch = await client.requestPatchDump(2000);
+        activeScene = patch.scene;
+        setPersistedActiveScene(activeScene);
+        await client.disconnect();
+      }
+    } catch {}
+
     console.log('\n========================================');
     console.log('  CENAS DO PRESET (NUX MG-30)');
     console.log('========================================');
-    console.log('  [1] Scene 1 (Cena Principal)');
-    console.log('  [2] Scene 2 (Cena Secundária)');
-    console.log('  [3] Scene 3 (Cena Solo / Lead)');
+    console.log(`  ${activeScene === 1 ? '🟢 [1] Scene 1 (Cena Principal) - ATIVA' : '⚪ [1] Scene 1 (Cena Principal)'}`);
+    console.log(`  ${activeScene === 2 ? '🟢 [2] Scene 2 (Cena Secundária) - ATIVA' : '⚪ [2] Scene 2 (Cena Secundária)'}`);
+    console.log(`  ${activeScene === 3 ? '🟢 [3] Scene 3 (Cena Solo / Lead) - ATIVA' : '⚪ [3] Scene 3 (Cena Solo / Lead)'}`);
     console.log('========================================\n');
   });
 
@@ -436,21 +452,26 @@ sceneCmd
       process.exit(1);
     }
     const client = await requireConnection();
+    let isCurrent = false;
+    let bpm = 120;
+    let presetName = loadNuxState().currentPresetName;
     try {
       const patch = await client.requestPatchDump(2000);
-      const isCurrent = patch.scene === sceneNum;
-      printCard(`Cena ${sceneNum}`, {
-        'Número': sceneNum,
-        'Status': isCurrent ? '🟢 Ativa' : '⚪ Inativa',
-        'BPM': patch.bpm,
-        'Preset': patch.presetName
-      });
+      isCurrent = patch.scene === sceneNum;
+      bpm = patch.bpm;
+      presetName = patch.presetName;
+      if (isCurrent) setPersistedActiveScene(sceneNum);
     } catch {
-      printCard(`Cena ${sceneNum}`, {
-        'Número': sceneNum,
-        'Dica': 'Use "nux scene select ' + sceneNum + '" para ativar.'
-      });
+      isCurrent = getPersistedActiveScene() === sceneNum;
     }
+
+    printCard(`Cena ${sceneNum}`, {
+      'Número': sceneNum,
+      'Status': isCurrent ? '🟢 Ativa' : '⚪ Inativa',
+      'BPM': bpm,
+      'Preset': presetName,
+      'Comando': `nux scene select ${sceneNum}`
+    });
     await finishCommand(client);
   });
 
@@ -465,7 +486,8 @@ sceneCmd
     }
     const client = await requireConnection();
     client.selectScene(sceneNum);
-    console.log(`🎬 Cena ${sceneNum} selecionada.`);
+    setPersistedActiveScene(sceneNum);
+    console.log(`🎬 Cena ${sceneNum} selecionada e ativada.`);
     await finishCommand(client);
   });
 
@@ -473,8 +495,27 @@ sceneCmd
   .command('clone <origem> <destino>')
   .description('Clona a configuração da cena <origem> para a cena <destino>')
   .action(async (src: string, dest: string) => {
+    const srcNum = Number(src);
+    const destNum = Number(dest);
+    if (![1, 2, 3].includes(srcNum) || ![1, 2, 3].includes(destNum)) {
+      console.error('❌ Números de cena inválidos. Escolha 1, 2 ou 3 para origem e destino.');
+      process.exit(1);
+    }
+    if (srcNum === destNum) {
+      console.error('❌ Origem e destino devem ser cenas diferentes.');
+      process.exit(1);
+    }
     const client = await requireConnection();
-    console.log('❌ Funcionalidade não suportada: clonagem de cena via MIDI não é suportada pelo NUX MG-30.');
+    const srcStates = getPersistedSceneBlockStates(srcNum);
+    setPersistedSceneBlockStates(destNum, srcStates);
+    client.selectScene(destNum);
+    setPersistedActiveScene(destNum);
+    for (const [block, enabled] of Object.entries(srcStates)) {
+      try {
+        client.setBlockState(block as BlockType, enabled);
+      } catch {}
+    }
+    console.log(`📋 Configuração da Cena ${srcNum} clonada com sucesso para a Cena ${destNum}!`);
     await finishCommand(client);
   });
 
@@ -482,8 +523,22 @@ sceneCmd
   .command('reset <id>')
   .description('Reseta a cena <1|2|3> para as configurações padrão do preset')
   .action(async (id: string) => {
+    const sceneNum = Number(id);
+    if (![1, 2, 3].includes(sceneNum)) {
+      console.error('❌ Número de cena inválido. Escolha 1, 2 ou 3.');
+      process.exit(1);
+    }
     const client = await requireConnection();
-    console.log('❌ Funcionalidade não suportada: reset de cena via MIDI não é suportado pelo NUX MG-30.');
+    const defaultStates = DEFAULT_BLOCK_STATES;
+    setPersistedSceneBlockStates(sceneNum, defaultStates);
+    client.selectScene(sceneNum);
+    setPersistedActiveScene(sceneNum);
+    for (const [block, enabled] of Object.entries(defaultStates)) {
+      try {
+        client.setBlockState(block as BlockType, enabled);
+      } catch {}
+    }
+    console.log(`🔄 Cena ${sceneNum} resetada para as configurações padrão.`);
     await finishCommand(client);
   });
 

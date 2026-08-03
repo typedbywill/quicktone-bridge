@@ -12,10 +12,12 @@ export interface NuxState {
   currentPresetName: string;
   blockStates: Record<string, boolean>;
   paramStates: Record<string, number>;
+  activeScene: number;
+  sceneStates: Record<number, Record<string, boolean>>;
   lastUpdated: string;
 }
 
-const DEFAULT_BLOCK_STATES: Record<string, boolean> = {
+export const DEFAULT_BLOCK_STATES: Record<string, boolean> = {
   WAH: false,
   NG: true,
   CMP: false,
@@ -42,6 +44,8 @@ export function loadNuxState(): NuxState {
           currentPresetName: parsed.currentPresetName || '01A',
           blockStates: { ...DEFAULT_BLOCK_STATES, ...(parsed.blockStates || {}) },
           paramStates: parsed.paramStates || {},
+          activeScene: parsed.activeScene || 1,
+          sceneStates: parsed.sceneStates || {},
           lastUpdated: parsed.lastUpdated || new Date().toISOString()
         };
       }
@@ -52,11 +56,19 @@ export function loadNuxState(): NuxState {
     currentPresetName: '01A',
     blockStates: { ...DEFAULT_BLOCK_STATES },
     paramStates: {},
+    activeScene: 1,
+    sceneStates: {},
     lastUpdated: new Date().toISOString()
   };
 }
 
-export function saveNuxState(pc: number, blockStates?: Record<string, boolean>, paramStates?: Record<string, number>): void {
+export function saveNuxState(
+  pc: number, 
+  blockStates?: Record<string, boolean>, 
+  paramStates?: Record<string, number>,
+  activeScene?: number,
+  sceneStates?: Record<number, Record<string, boolean>>
+): void {
   try {
     const currentState = loadNuxState();
     const info = programChangeToPresetName(pc);
@@ -65,6 +77,8 @@ export function saveNuxState(pc: number, blockStates?: Record<string, boolean>, 
       currentPresetName: info.name,
       blockStates: blockStates ? { ...currentState.blockStates, ...blockStates } : (pc !== currentState.currentPresetPc ? { ...DEFAULT_BLOCK_STATES } : currentState.blockStates),
       paramStates: paramStates ? { ...currentState.paramStates, ...paramStates } : currentState.paramStates,
+      activeScene: activeScene !== undefined ? activeScene : currentState.activeScene,
+      sceneStates: sceneStates ? { ...currentState.sceneStates, ...sceneStates } : currentState.sceneStates,
       lastUpdated: new Date().toISOString()
     };
     fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
@@ -91,7 +105,29 @@ export function getPersistedParamState(block: BlockType, paramId: number): numbe
 export function setPersistedParamState(block: BlockType, paramId: number, value: number): void {
   const state = loadNuxState();
   const paramStates = { ...(state.paramStates || {}), [`${block}:${paramId}`]: value };
-  saveNuxState(state.currentPresetPc, state.blockStates, paramStates);
+  saveNuxState(state.currentPresetPc, state.blockStates, paramStates, state.activeScene, state.sceneStates);
+}
+
+export function getPersistedActiveScene(): number {
+  const state = loadNuxState();
+  return state.activeScene || 1;
+}
+
+export function setPersistedActiveScene(scene: number): void {
+  const state = loadNuxState();
+  const validScene = Math.min(3, Math.max(1, scene));
+  saveNuxState(state.currentPresetPc, state.blockStates, state.paramStates, validScene, state.sceneStates);
+}
+
+export function getPersistedSceneBlockStates(scene: number): Record<string, boolean> {
+  const state = loadNuxState();
+  return state.sceneStates?.[scene] ? { ...state.sceneStates[scene] } : { ...state.blockStates };
+}
+
+export function setPersistedSceneBlockStates(scene: number, blockStates: Record<string, boolean>): void {
+  const state = loadNuxState();
+  const sceneStates = { ...(state.sceneStates || {}), [scene]: { ...blockStates } };
+  saveNuxState(state.currentPresetPc, state.blockStates, state.paramStates, state.activeScene, sceneStates);
 }
 
 export async function finishCommand(client?: NuxMG30Client, exitCode = 0): Promise<never> {
