@@ -540,24 +540,22 @@ blockCmd
       } else if (['off', 'disable', 'disabled', '0', 'desligado', 'false'].includes(lower)) {
         enable = false;
       } else if (['toggle', 'alternar'].includes(lower)) {
-        let isEnabled = false;
-        try {
-          const patch = await client.requestPatchDump(2000);
-          isEnabled = patch.blocks[block]?.enabled ?? false;
-        } catch {}
-        enable = !isEnabled;
+        enable = !getPersistedBlockState(block);
       } else {
         console.error(`❌ Estado inválido "${status}". Use: on, off ou toggle.`);
         await finishCommand(client);
         return;
       }
       client.setBlockState(block, enable);
+      setPersistedBlockState(block, enable);
       console.log(`⚡ Bloco ${block} alterado para: [${enable ? 'Ligado' : 'Desligado'}]`);
     } else {
-      let isEnabled = false;
+      let isEnabled = getPersistedBlockState(block);
       try {
-        const patch = await client.requestPatchDump(2000);
-        isEnabled = patch.blocks[block]?.enabled ?? false;
+        const patch = await client.requestPatchDump(1000);
+        if (patch.blocks[block]) {
+          isEnabled = patch.blocks[block].enabled;
+        }
       } catch {}
       console.log(`⚡ Estado do bloco ${block} no patch ativo: [${isEnabled ? 'Ligado' : 'Desligado'}]`);
     }
@@ -571,6 +569,7 @@ blockCmd
     const block = normalizeBlockId(id);
     const client = await requireConnection();
     client.setBlockState(block, true);
+    setPersistedBlockState(block, true);
     console.log(`⚡ Bloco ${block} ativado.`);
     await finishCommand(client);
   });
@@ -582,6 +581,7 @@ blockCmd
     const block = normalizeBlockId(id);
     const client = await requireConnection();
     client.setBlockState(block, false);
+    setPersistedBlockState(block, false);
     console.log(`⚡ Bloco ${block} desativado.`);
     await finishCommand(client);
   });
@@ -592,13 +592,10 @@ blockCmd
   .action(async (id: string) => {
     const block = normalizeBlockId(id);
     const client = await requireConnection();
-    let currentEnabled = false;
-    try {
-      const patch = await client.requestPatchDump(2000);
-      currentEnabled = patch.blocks[block]?.enabled ?? false;
-    } catch {}
+    const currentEnabled = getPersistedBlockState(block);
     const newState = !currentEnabled;
     client.setBlockState(block, newState);
+    setPersistedBlockState(block, newState);
     console.log(`⚡ Bloco ${block} alternado para [${newState ? 'Ligado' : 'Desligado'}].`);
     await finishCommand(client);
   });
