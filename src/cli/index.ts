@@ -47,7 +47,7 @@ const COMMAND_GROUPS: Record<string, { label: string; emoji: string; commands: s
   control: {
     label: 'Controle do Dispositivo',
     emoji: '🎛️',
-    commands: ['preset', 'preset-up', 'preset-down', 'scene', 'block', 'param', 'chain', 'device'],
+    commands: ['preset', 'preset-up', 'preset-down', 'scene', 'scene-up', 'scene-down', 'block', 'param', 'chain', 'device'],
   },
   files: {
     label: 'Arquivos',
@@ -445,11 +445,33 @@ program
 // Cenas
 // ==========================================
 
+async function selectSceneAction(sceneNum: number) {
+  if (![1, 2, 3].includes(sceneNum)) {
+    console.error('❌ Número de cena inválido. Escolha 1, 2 ou 3.');
+    process.exit(1);
+  }
+  const client = await requireConnection();
+  client.selectScene(sceneNum);
+  setPersistedActiveScene(sceneNum);
+
+  const sceneStates = getPersistedSceneBlockStates(sceneNum);
+  if (sceneStates && Object.keys(sceneStates).length > 0) {
+    for (const [block, enabled] of Object.entries(sceneStates)) {
+      try {
+        client.setBlockState(block as BlockType, enabled);
+      } catch {}
+    }
+  }
+
+  console.log(`🎬 Cena ${sceneNum} selecionada e ativada.`);
+  await finishCommand(client);
+}
+
 const sceneCmd = program.command('scene').description('Gerenciamento de Cenas (Scene 1, 2, 3)');
 
 sceneCmd
   .command('list')
-  .description('Lista as cenas disponíveis')
+  .description('Lista as cenas disponíveis (Scene 1, 2, 3)')
   .action(async () => {
     let activeScene = getPersistedActiveScene();
     try {
@@ -472,10 +494,10 @@ sceneCmd
   });
 
 sceneCmd
-  .command('show <id>')
-  .description('Exibe os detalhes da cena <1|2|3>')
-  .action(async (id: string) => {
-    const sceneNum = Number(id);
+  .command('show [id]')
+  .description('Exibe os detalhes da cena <1|2|3> (padrão: cena ativa)')
+  .action(async (id?: string) => {
+    let sceneNum = id ? Number(id) : getPersistedActiveScene();
     if (![1, 2, 3].includes(sceneNum)) {
       console.error('❌ Número de cena inválido. Escolha 1, 2 ou 3.');
       process.exit(1);
@@ -499,9 +521,50 @@ sceneCmd
       'Status': isCurrent ? '🟢 Ativa' : '⚪ Inativa',
       'BPM': bpm,
       'Preset': presetName,
-      'Comando': `nux scene select ${sceneNum}`
+      'Comando Ativar': `nux scene ${sceneNum}`
     });
     await finishCommand(client);
+  });
+
+sceneCmd
+  .command('up')
+  .description('Avança para a próxima cena no hardware (1 ➔ 2, 2 ➔ 3, 3 ➔ 1)')
+  .action(async () => {
+    const current = getPersistedActiveScene();
+    const next = current >= 3 ? 1 : current + 1;
+    console.log(`⬆️ Avançando cena: Scene ${current} ➔ Scene ${next}`);
+    await selectSceneAction(next);
+  });
+
+sceneCmd
+  .command('down')
+  .description('Recua para a cena anterior no hardware (3 ➔ 2, 2 ➔ 1, 1 ➔ 3)')
+  .action(async () => {
+    const current = getPersistedActiveScene();
+    const prev = current <= 1 ? 3 : current - 1;
+    console.log(`⬇️ Recuando cena: Scene ${current} ➔ Scene ${prev}`);
+    await selectSceneAction(prev);
+  });
+
+sceneCmd
+  .command('1')
+  .description('Seleciona e ativa a Cena 1')
+  .action(async () => {
+    await selectSceneAction(1);
+  });
+
+sceneCmd
+  .command('2')
+  .description('Seleciona e ativa a Cena 2')
+  .action(async () => {
+    await selectSceneAction(2);
+  });
+
+sceneCmd
+  .command('3')
+  .description('Seleciona e ativa a Cena 3')
+  .action(async () => {
+    await selectSceneAction(3);
   });
 
 sceneCmd
@@ -509,15 +572,7 @@ sceneCmd
   .description('Seleciona/ativa a cena <1|2|3>')
   .action(async (id: string) => {
     const sceneNum = Number(id);
-    if (![1, 2, 3].includes(sceneNum)) {
-      console.error('❌ Número de cena inválido. Escolha 1, 2 ou 3.');
-      process.exit(1);
-    }
-    const client = await requireConnection();
-    client.selectScene(sceneNum);
-    setPersistedActiveScene(sceneNum);
-    console.log(`🎬 Cena ${sceneNum} selecionada e ativada.`);
-    await finishCommand(client);
+    await selectSceneAction(sceneNum);
   });
 
 sceneCmd
@@ -569,6 +624,27 @@ sceneCmd
     }
     console.log(`🔄 Cena ${sceneNum} resetada para as configurações padrão.`);
     await finishCommand(client);
+  });
+
+// Atalhos Globais Scene Up / Scene Down
+program
+  .command('scene-up')
+  .description('Atalho para avançar cena (nux scene up)')
+  .action(async () => {
+    const current = getPersistedActiveScene();
+    const next = current >= 3 ? 1 : current + 1;
+    console.log(`⬆️ Avançando cena: Scene ${current} ➔ Scene ${next}`);
+    await selectSceneAction(next);
+  });
+
+program
+  .command('scene-down')
+  .description('Atalho para recuar cena (nux scene down)')
+  .action(async () => {
+    const current = getPersistedActiveScene();
+    const prev = current <= 1 ? 3 : current - 1;
+    console.log(`⬇️ Recuando cena: Scene ${current} ➔ Scene ${prev}`);
+    await selectSceneAction(prev);
   });
 
 // ==========================================

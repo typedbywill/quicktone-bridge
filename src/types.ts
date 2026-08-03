@@ -96,6 +96,7 @@ export interface NuxClientEvents {
   modelChanged: (data: { block: BlockType; modelId: number }) => void;
   paramChanged: (data: { block: BlockType; paramId: number; value: number }) => void;
   patchSaved: (data: { presetName: string; index: number }) => void;
+  sceneChanged: (data: { scene: number }) => void;
   sysex: (packet: SysExPacket) => void;
   error: (err: Error) => void;
 }

@@ -61,6 +61,16 @@ describe('NuxMG30Client Preset Navigation Tests', () => {
     expect(wrapDown.name).toBe('32D');
     expect(client.getActivePresetIndex()).toBe(127);
   });
+
+  it('should send scene selection messages correctly', () => {
+    const transport = new DummyTransport();
+    const client = new NuxMG30Client({ transport });
+
+    client.selectScene(2);
+    expect(transport.sentMessages.length).toBe(4);
+    expect(Array.from(transport.sentMessages[0])).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x01, 0xF7]); // SysEx
+    expect(Array.from(transport.sentMessages[1])).toEqual([0xB0, 0x00, 0x42]); // CC 0
+  });
 });
 
 describe('NUX Block Parameter Resolution Tests', () => {

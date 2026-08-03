@@ -51,7 +51,7 @@ export class SysExEncoder {
    * Set a parameter value for a block (0x01)
    */
   public static buildParameterChange(block: BlockType | number, paramId: number, value: number): Uint8Array {
-    const blockId = blockTypeToId(block);
+    const blockId = typeof block === 'number' ? block : blockTypeToId(block);
     return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.REALTIME_PARAM_CHANGE, SysExDirection.HOST_TO_DEVICE, blockId & 0x7F, paramId & 0x7F, value & 0x7F, SYSEX_END]);
   }
 
@@ -85,12 +85,21 @@ export class SysExEncoder {
   }
 
   /**
-   * Select active scene (1, 2, 3) using MIDI CC 80 (0x50)
-   * CC 80 Value 0 = Scene 1, Value 1 = Scene 2, Value 2 = Scene 3
+   * Select active scene (1, 2, 3) using SysEx Command 0x0C
+   */
+  public static buildSceneSelectSysEx(sceneNumber: number): Uint8Array {
+    const sceneVal = Math.min(2, Math.max(0, sceneNumber - 1));
+    return this.buildSysExPacket(SysExCommand.SCENE_SELECT, SysExDirection.HOST_TO_DEVICE, [sceneVal]);
+  }
+
+  /**
+   * Select active scene (1, 2, 3) using MIDI CC 0 (0x00)
+   * CC 0 Value 0x41 (65) = Scene 1, 0x42 (66) = Scene 2, 0x43 (67) = Scene 3
    */
   public static buildSceneSelect(sceneNumber: number, channel: number = 0): Uint8Array {
-    const sceneVal = Math.min(2, Math.max(0, sceneNumber - 1));
-    return this.buildControlChange(0x50, sceneVal, channel);
+    const validScene = Math.min(3, Math.max(1, sceneNumber));
+    const sceneVal = 0x40 + validScene;
+    return this.buildControlChange(0x00, sceneVal, channel);
   }
 
   /**
