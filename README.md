@@ -56,9 +56,10 @@ nux scene reset <1|2|3>         # Reset scene parameters
 
 ### ⚡ Blocos de Efeito
 ```bash
+nux block <id> [on|off]         # Show or set block ON/OFF (e.g. nux block wah on)
 nux block list                  # List all 10 effect blocks and models
 nux block show <id>             # Show block details and parameters
-nux block state <id>            # Show ON/OFF status of block
+nux block state <id> [on|off]   # Show or set ON/OFF status of block
 nux block enable <id>           # Turn effect block ON
 nux block disable <id>          # Turn effect block OFF
 nux block toggle <id>           # Toggle effect block status

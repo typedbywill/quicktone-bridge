@@ -66,10 +66,10 @@ const TEST_CASES: TestCase[] = [
   // 5. Controle de Blocos de Efeito
   { id: 31, category: 'Blocos de Efeito', name: 'Listar Blocos', description: 'Lista todos os blocos de efeito e seus modelos', args: ['block', 'list'] },
   { id: 32, category: 'Blocos de Efeito', name: 'Exibir Bloco MOD', description: 'Exibe os detalhes do bloco MOD', args: ['block', 'show', 'MOD'] },
-  { id: 33, category: 'Blocos de Efeito', name: 'Estado do Bloco MOD', description: 'Exibe o estado (ligado/desligado) do bloco MOD', args: ['block', 'state', 'MOD'] },
-  { id: 34, category: 'Blocos de Efeito', name: 'Ativar Bloco MOD', description: 'Liga o bloco MOD no pedal', args: ['block', 'enable', 'MOD'] },
-  { id: 35, category: 'Blocos de Efeito', name: 'Desativar Bloco MOD', description: 'Desliga o bloco MOD no pedal', args: ['block', 'disable', 'MOD'] },
-  { id: 36, category: 'Blocos de Efeito', name: 'Toggle Bloco MOD', description: 'Alterna o estado do bloco MOD', args: ['block', 'toggle', 'MOD'] },
+  { id: 33, category: 'Blocos de Efeito', name: 'Estado do Bloco MOD', description: 'Exibe o estado (ligado/desligado) do bloco MOD', args: ['block', 'MOD'] },
+  { id: 34, category: 'Blocos de Efeito', name: 'Ativar Bloco MOD', description: 'Liga o bloco MOD no pedal', args: ['block', 'MOD', 'on'] },
+  { id: 35, category: 'Blocos de Efeito', name: 'Desativar Bloco MOD', description: 'Desliga o bloco MOD no pedal', args: ['block', 'MOD', 'off'] },
+  { id: 36, category: 'Blocos de Efeito', name: 'Toggle Bloco MOD', description: 'Alterna o estado do bloco MOD', args: ['block', 'MOD', 'toggle'] },
   { id: 37, category: 'Blocos de Efeito', name: 'Resetar Bloco MOD', description: 'Reseta os parâmetros do bloco MOD para os padrões', args: ['block', 'reset', 'MOD'] },
 
   // 6. Controle de Parâmetros

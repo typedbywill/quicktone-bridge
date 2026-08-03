@@ -642,7 +642,53 @@ program
 // Blocos
 // ==========================================
 
-const blockCmd = program.command('block').description('Gerenciamento de Blocos de Efeito (WAH, NG, CMP, MOD, EFX, AMP, IR, EQ, SR, DLY, RVB, VOL, CAB)');
+const blockCmd = program
+  .command('block')
+  .description('Gerenciamento de Blocos de Efeito (WAH, NG, CMP, MOD, EFX, AMP, IR, EQ, SR, DLY, RVB, VOL, CAB)')
+  .argument('[id]', 'ID do bloco (ex: wah, MOD)')
+  .argument('[status]', 'on | off | toggle')
+  .action(async (id?: string, status?: string) => {
+    // Sintaxe curta: nux block <id> [on|off|toggle]
+    // Sem argumentos (e sem subcomando), mostra o help do grupo block.
+    if (!id) {
+      blockCmd.help();
+      return;
+    }
+    await applyBlockState(id, status);
+  });
+
+async function applyBlockState(id: string, status?: string): Promise<void> {
+  const block = normalizeBlockId(id);
+  const client = await requireConnection();
+  if (status !== undefined) {
+    const lower = status.toLowerCase();
+    let enable: boolean;
+    if (['on', 'enable', 'enabled', '1', 'ligado', 'true'].includes(lower)) {
+      enable = true;
+    } else if (['off', 'disable', 'disabled', '0', 'desligado', 'false'].includes(lower)) {
+      enable = false;
+    } else if (['toggle', 'alternar'].includes(lower)) {
+      enable = !getPersistedBlockState(block);
+    } else {
+      console.error(`❌ Estado inválido "${status}". Use: on, off ou toggle.`);
+      await finishCommand(client);
+      return;
+    }
+    client.setBlockState(block, enable);
+    setPersistedBlockState(block, enable);
+    console.log(`⚡ Bloco ${block} alterado para: [${enable ? 'Ligado' : 'Desligado'}]`);
+  } else {
+    let isEnabled = getPersistedBlockState(block);
+    try {
+      const patch = await client.requestPatchDump(1000);
+      if (patch.blocks[block]) {
+        isEnabled = patch.blocks[block].enabled;
+      }
+    } catch {}
+    console.log(`⚡ Estado do bloco ${block} no patch ativo: [${isEnabled ? 'Ligado' : 'Desligado'}]`);
+  }
+  await finishCommand(client);
+}
 
 blockCmd
   .command('list')
@@ -683,36 +729,7 @@ blockCmd
   .command('state <id> [status]')
   .description('Exibe ou altera o estado (ligado/desligado) do bloco no patch ativo')
   .action(async (id: string, status?: string) => {
-    const block = normalizeBlockId(id);
-    const client = await requireConnection();
-    if (status !== undefined) {
-      const lower = status.toLowerCase();
-      let enable: boolean;
-      if (['on', 'enable', 'enabled', '1', 'ligado', 'true'].includes(lower)) {
-        enable = true;
-      } else if (['off', 'disable', 'disabled', '0', 'desligado', 'false'].includes(lower)) {
-        enable = false;
-      } else if (['toggle', 'alternar'].includes(lower)) {
-        enable = !getPersistedBlockState(block);
-      } else {
-        console.error(`❌ Estado inválido "${status}". Use: on, off ou toggle.`);
-        await finishCommand(client);
-        return;
-      }
-      client.setBlockState(block, enable);
-      setPersistedBlockState(block, enable);
-      console.log(`⚡ Bloco ${block} alterado para: [${enable ? 'Ligado' : 'Desligado'}]`);
-    } else {
-      let isEnabled = getPersistedBlockState(block);
-      try {
-        const patch = await client.requestPatchDump(1000);
-        if (patch.blocks[block]) {
-          isEnabled = patch.blocks[block].enabled;
-        }
-      } catch {}
-      console.log(`⚡ Estado do bloco ${block} no patch ativo: [${isEnabled ? 'Ligado' : 'Desligado'}]`);
-    }
-    await finishCommand(client);
+    await applyBlockState(id, status);
   });
 
 blockCmd
