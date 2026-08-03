@@ -32,6 +32,35 @@ program
   .description('CLI tool for NUX MG-30 Multi-Effects Processor')
   .version('1.0.0');
 
+// Mapeamento de comandos para categorias (usado pelo help customizado)
+const COMMAND_GROUPS: Record<string, { label: string; emoji: string; commands: string[] }> = {
+  status: {
+    label: 'Status & Informações',
+    emoji: '📊',
+    commands: ['ping', 'status', 'info', 'doctor'],
+  },
+  connection: {
+    label: 'Conexão',
+    emoji: '🔌',
+    commands: ['connect', 'disconnect', 'sync'],
+  },
+  control: {
+    label: 'Controle do Dispositivo',
+    emoji: '🎛️',
+    commands: ['preset', 'preset-up', 'preset-down', 'scene', 'block', 'param', 'chain', 'device'],
+  },
+  files: {
+    label: 'Arquivos',
+    emoji: '📁',
+    commands: ['export', 'import'],
+  },
+  debug: {
+    label: 'Diagnóstico & Debug',
+    emoji: '🔧',
+    commands: ['logs', 'dump'],
+  },
+};
+
 // ==========================================
 // Conexão
 // ==========================================
@@ -1010,6 +1039,60 @@ program
     }
     await finishCommand(client);
   });
+
+// Help customizado agrupado por categoria
+program.configureHelp({
+  formatHelp(cmd, helper) {
+    const title = `Usage: ${helper.commandUsage(cmd)}\n\n${helper.commandDescription(cmd)}\n`;
+
+    // Opções globais
+    const optionLines = helper.visibleOptions(cmd).map(opt => {
+      const flags = helper.optionTerm(opt);
+      const desc = helper.optionDescription(opt);
+      return `  ${flags.padEnd(18)}${desc}`;
+    });
+    const optionsSection = optionLines.length
+      ? `\nOptions:\n${optionLines.join('\n')}\n`
+      : '';
+
+    // Agrupa subcomandos por categoria
+    const allCmds = helper.visibleCommands(cmd);
+    const cmdMap = new Map(allCmds.map(c => [c.name(), c]));
+    const usedNames = new Set<string>();
+    const sections: string[] = [];
+
+    for (const group of Object.values(COMMAND_GROUPS)) {
+      const lines: string[] = [];
+      for (const name of group.commands) {
+        const c = cmdMap.get(name);
+        if (c) {
+          const term = helper.subcommandTerm(c);
+          const desc = helper.subcommandDescription(c);
+          lines.push(`  ${term.padEnd(18)}${desc}`);
+          usedNames.add(name);
+        }
+      }
+      if (lines.length) {
+        sections.push(`\n${group.emoji}  ${group.label}:\n${lines.join('\n')}`);
+      }
+    }
+
+    // Comandos não categorizados (ex: help)
+    const uncategorized: string[] = [];
+    for (const c of allCmds) {
+      if (!usedNames.has(c.name())) {
+        const term = helper.subcommandTerm(c);
+        const desc = helper.subcommandDescription(c);
+        uncategorized.push(`  ${term.padEnd(18)}${desc}`);
+      }
+    }
+    if (uncategorized.length) {
+      sections.push(`\n  Outros:\n${uncategorized.join('\n')}`);
+    }
+
+    return `${title}${optionsSection}${sections.join('\n')}\n`;
+  },
+});
 
 // Parse command line arguments
 program.parse(process.argv);
