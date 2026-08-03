@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { NuxMG30Client } from '../src/client/NuxMG30Client.js';
 import { BaseTransport } from '../src/transport/BaseTransport.js';
 import { MidiPortInfo } from '../src/types.js';
+import { findBlockParam, NUX_BLOCK_PARAM_CATALOG } from '../src/constants.js';
 
 class DummyTransport extends BaseTransport {
   public sentMessages: Uint8Array[] = [];
@@ -59,5 +60,42 @@ describe('NuxMG30Client Preset Navigation Tests', () => {
     const wrapDown = client.presetDown();
     expect(wrapDown.name).toBe('32D');
     expect(client.getActivePresetIndex()).toBe(127);
+  });
+});
+
+describe('NUX Block Parameter Resolution Tests', () => {
+  it('should correctly resolve block and paramId for explicit block and param name', () => {
+    expect(NUX_BLOCK_PARAM_CATALOG.AMP.length).toBeGreaterThan(0);
+
+    const ampGain = findBlockParam('AMP', 'Gain');
+    expect(ampGain.block).toBe('AMP');
+    expect(ampGain.paramId).toBe(0);
+    expect(ampGain.paramName).toBe('Gain');
+
+    const dlyTime = findBlockParam('DLY', 'Time');
+    expect(dlyTime.block).toBe('DLY');
+    expect(dlyTime.paramId).toBe(0);
+    expect(dlyTime.paramName).toBe('Time');
+
+    const modRate = findBlockParam('MOD', 'Rate');
+    expect(modRate.block).toBe('MOD');
+    expect(modRate.paramId).toBe(0);
+    expect(modRate.paramName).toBe('Rate');
+
+    const modMix = findBlockParam('MOD', 'Mix');
+    expect(modMix.block).toBe('MOD');
+    expect(modMix.paramId).toBe(2);
+    expect(modMix.paramName).toBe('Mix');
+  });
+
+  it('should correctly resolve param by single param name or numeric index', () => {
+    const timeParam = findBlockParam('Time');
+    expect(timeParam.block).toBe('DLY');
+    expect(timeParam.paramId).toBe(0);
+
+    const numericParam = findBlockParam('AMP', '3');
+    expect(numericParam.block).toBe('AMP');
+    expect(numericParam.paramId).toBe(3);
+    expect(numericParam.paramName).toBe('Treble');
   });
 });

@@ -13,9 +13,11 @@ import {
   saveNuxState,
   getPersistedBlockState,
   setPersistedBlockState,
+  getPersistedParamState,
+  setPersistedParamState,
   finishCommand
 } from './helpers.js';
-import { BLOCK_LIST, NUX_MODEL_CATALOG, getModelName, programChangeToPresetName } from '../constants.js';
+import { BLOCK_LIST, NUX_MODEL_CATALOG, NUX_BLOCK_PARAM_CATALOG, findBlockParam, getModelName, programChangeToPresetName } from '../constants.js';
 import { BlockType } from '../types.js';
 
 const program = new Command();
@@ -618,47 +620,80 @@ blockCmd
 const paramCmd = program.command('param').description('Controle de Parâmetros de Efeito');
 
 paramCmd
-  .command('list')
-  .description('Lista os parâmetros disponíveis')
-  .action(() => {
+  .command('list [block]')
+  .description('Lista os parâmetros disponíveis por bloco ou de todos os blocos')
+  .action((blockInput?: string) => {
     console.log('\n========================================');
-    console.log('  PARÂMETROS DE EFEITOS');
-    console.log('========================================');
-    console.log('  Gain, Bass, Middle, Treble, Master, Mix, Decay, Feedback, Depth, Speed...');
+    if (blockInput) {
+      const { block } = findBlockParam(blockInput);
+      const params = NUX_BLOCK_PARAM_CATALOG[block] || [];
+      console.log(`  PARÂMETROS DO BLOCO DE EFEITO [${block}]`);
+      console.log('========================================');
+      for (const p of params) {
+        console.log(`  [${p.id}] ${p.name.padEnd(15)} : Faixa (0 a 127)`);
+      }
+    } else {
+      console.log('  PARÂMETROS DE EFEITOS (TODOS OS BLOCOS)');
+      console.log('========================================');
+      for (const b of BLOCK_LIST) {
+        const params = NUX_BLOCK_PARAM_CATALOG[b] || [];
+        const paramStrList = params.map(p => `[${p.id}] ${p.name}`).join(', ');
+        console.log(`  ${b.padEnd(5)}: ${paramStrList}`);
+      }
+    }
     console.log('========================================\n');
   });
 
 paramCmd
-  .command('show <id>')
+  .command('show [blockOrParam] [paramName]')
   .description('Exibe os detalhes de um parâmetro')
-  .action(async (id: string) => {
+  .action(async (arg1?: string, arg2?: string) => {
     const client = await requireConnection();
-    let val = 64;
+    const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
+    let val = getPersistedParamState(block, paramId);
     try {
       const patch = await client.requestPatchDump(2000);
-      const amp = patch.blocks['AMP'];
-      if (amp && amp.params.length > 0) {
-        val = amp.params[0];
+      const blkState = patch.blocks[block];
+      if (blkState && blkState.params && blkState.params[paramId] !== undefined) {
+        val = blkState.params[paramId];
       }
     } catch {}
-    console.log(`📊 Parâmetro [${id}]: Faixa (0 a 127), Valor Atual: ${val}.`);
+    console.log(`📊 Parâmetro [${block} > ${paramName}]: Faixa (0 a 127), Valor Atual: ${val}.`);
     await finishCommand(client);
   });
 
 paramCmd
-  .command('get <id>')
+  .command('get [blockOrParam] [paramName]')
   .description('Obtém o valor atual de um parâmetro')
-  .action(async (id: string) => {
+  .action(async (arg1?: string, arg2?: string) => {
     const client = await requireConnection();
-    let val = 64;
+    if (!arg1 && !arg2) {
+      console.log('\n========================================');
+      console.log('  VALORES DE PARÂMETROS DO BLOCO [AMP]');
+      console.log('========================================');
+      const params = NUX_BLOCK_PARAM_CATALOG['AMP'] || [];
+      let patch: any;
+      try { patch = await client.requestPatchDump(2000); } catch {}
+      for (const p of params) {
+        let val = patch?.blocks?.['AMP']?.params?.[p.id];
+        if (val === undefined) val = getPersistedParamState('AMP', p.id);
+        console.log(`  🔎 ${p.name.padEnd(12)} (ID ${p.id}) = ${val}`);
+      }
+      console.log('========================================\n');
+      await finishCommand(client);
+      return;
+    }
+
+    const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
+    let val = getPersistedParamState(block, paramId);
     try {
       const patch = await client.requestPatchDump(2000);
-      const amp = patch.blocks['AMP'];
-      if (amp && amp.params.length > 0) {
-        val = amp.params[0];
+      const blkState = patch.blocks[block];
+      if (blkState && blkState.params && blkState.params[paramId] !== undefined) {
+        val = blkState.params[paramId];
       }
     } catch {}
-    console.log(`🔎 Parâmetro ${id} = ${val}`);
+    console.log(`🔎 Parâmetro ${block} > ${paramName} (ID ${paramId}) = ${val}`);
     await finishCommand(client);
   });
 
@@ -667,24 +702,41 @@ paramCmd
   .description('Define o valor de um parâmetro de um bloco (ex: nux param set AMP Gain 80)')
   .action(async (arg1?: string, arg2?: string, arg3?: string) => {
     const client = await requireConnection();
-    let blockStr = 'AMP';
-    let paramStr = 'Gain';
-    let val = 64;
+    let bInput: string | undefined;
+    let pInput: string | number | undefined;
+    let valInput: string | undefined;
 
     if (arg3 !== undefined) {
-      blockStr = arg1!;
-      paramStr = arg2!;
-      val = Math.min(127, Math.max(0, Number(arg3)));
+      bInput = arg1;
+      pInput = arg2;
+      valInput = arg3;
     } else if (arg2 !== undefined) {
-      paramStr = arg1!;
-      val = Math.min(127, Math.max(0, Number(arg2)));
+      if (!isNaN(Number(arg2))) {
+        pInput = arg1;
+        valInput = arg2;
+      } else {
+        bInput = arg1;
+        pInput = arg2;
+      }
     } else if (arg1 !== undefined) {
-      val = Math.min(127, Math.max(0, Number(arg1)));
+      if (!isNaN(Number(arg1))) {
+        valInput = arg1;
+      } else {
+        pInput = arg1;
+      }
     }
 
-    const block = normalizeBlockId(blockStr);
-    client.setParameter(block, 0, val);
-    console.log(`⚙️ Parâmetro ${paramStr} do bloco ${block} definido para ${val}.`);
+    if (valInput === undefined) {
+      console.error('\n❌ Erro: Valor do parâmetro não especificado.');
+      console.error('Uso: nux param set [bloco] <parâmetro> <valor>\nExemplo: nux param set AMP Gain 80\n');
+      await finishCommand(client, 1);
+    }
+
+    const val = Math.min(127, Math.max(0, Number(valInput)));
+    const { block, paramId, paramName } = findBlockParam(bInput, pInput);
+    client.setParameter(block, paramId, val);
+    setPersistedParamState(block, paramId, val);
+    console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para ${val}.`);
     await finishCommand(client);
   });
 
@@ -693,11 +745,10 @@ paramCmd
   .description('Define o valor do parâmetro para o mínimo (0)')
   .action(async (arg1?: string, arg2?: string) => {
     const client = await requireConnection();
-    const blockStr = arg2 ? arg1 : 'AMP';
-    const paramStr = arg2 ? arg2 : (arg1 || 'Gain');
-    const block = normalizeBlockId(blockStr!);
-    client.setParameter(block, 0, 0);
-    console.log(`⚙️ Parâmetro ${paramStr} definido para o MÍNIMO (0).`);
+    const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
+    client.setParameter(block, paramId, 0);
+    setPersistedParamState(block, paramId, 0);
+    console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÍNIMO (0).`);
     await finishCommand(client);
   });
 
@@ -706,11 +757,10 @@ paramCmd
   .description('Define o valor do parâmetro para o máximo (127)')
   .action(async (arg1?: string, arg2?: string) => {
     const client = await requireConnection();
-    const blockStr = arg2 ? arg1 : 'AMP';
-    const paramStr = arg2 ? arg2 : (arg1 || 'Gain');
-    const block = normalizeBlockId(blockStr!);
-    client.setParameter(block, 0, 127);
-    console.log(`⚙️ Parâmetro ${paramStr} definido para o MÁXIMO (127).`);
+    const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
+    client.setParameter(block, paramId, 127);
+    setPersistedParamState(block, paramId, 127);
+    console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÁXIMO (127).`);
     await finishCommand(client);
   });
 

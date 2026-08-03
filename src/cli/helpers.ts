@@ -11,6 +11,7 @@ export interface NuxState {
   currentPresetPc: number;
   currentPresetName: string;
   blockStates: Record<string, boolean>;
+  paramStates: Record<string, number>;
   lastUpdated: string;
 }
 
@@ -40,6 +41,7 @@ export function loadNuxState(): NuxState {
           currentPresetPc: parsed.currentPresetPc,
           currentPresetName: parsed.currentPresetName || '01A',
           blockStates: { ...DEFAULT_BLOCK_STATES, ...(parsed.blockStates || {}) },
+          paramStates: parsed.paramStates || {},
           lastUpdated: parsed.lastUpdated || new Date().toISOString()
         };
       }
@@ -49,11 +51,12 @@ export function loadNuxState(): NuxState {
     currentPresetPc: 0,
     currentPresetName: '01A',
     blockStates: { ...DEFAULT_BLOCK_STATES },
+    paramStates: {},
     lastUpdated: new Date().toISOString()
   };
 }
 
-export function saveNuxState(pc: number, blockStates?: Record<string, boolean>): void {
+export function saveNuxState(pc: number, blockStates?: Record<string, boolean>, paramStates?: Record<string, number>): void {
   try {
     const currentState = loadNuxState();
     const info = programChangeToPresetName(pc);
@@ -61,6 +64,7 @@ export function saveNuxState(pc: number, blockStates?: Record<string, boolean>):
       currentPresetPc: pc,
       currentPresetName: info.name,
       blockStates: blockStates ? { ...currentState.blockStates, ...blockStates } : (pc !== currentState.currentPresetPc ? { ...DEFAULT_BLOCK_STATES } : currentState.blockStates),
+      paramStates: paramStates ? { ...currentState.paramStates, ...paramStates } : currentState.paramStates,
       lastUpdated: new Date().toISOString()
     };
     fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
@@ -75,7 +79,19 @@ export function getPersistedBlockState(block: BlockType): boolean {
 export function setPersistedBlockState(block: BlockType, enabled: boolean): void {
   const state = loadNuxState();
   state.blockStates[block] = enabled;
-  saveNuxState(state.currentPresetPc, state.blockStates);
+  saveNuxState(state.currentPresetPc, state.blockStates, state.paramStates);
+}
+
+export function getPersistedParamState(block: BlockType, paramId: number): number {
+  const state = loadNuxState();
+  const key = `${block}:${paramId}`;
+  return state.paramStates?.[key] ?? 64;
+}
+
+export function setPersistedParamState(block: BlockType, paramId: number, value: number): void {
+  const state = loadNuxState();
+  const paramStates = { ...(state.paramStates || {}), [`${block}:${paramId}`]: value };
+  saveNuxState(state.currentPresetPc, state.blockStates, paramStates);
 }
 
 export async function finishCommand(client?: NuxMG30Client, exitCode = 0): Promise<never> {

@@ -180,6 +180,138 @@ export const NUX_MODEL_CATALOG: Record<BlockType, { id: number; name: string; de
   ]
 };
 
+export const NUX_BLOCK_PARAM_CATALOG: Record<BlockType, { id: number; name: string }[]> = {
+  WAH: [
+    { id: 0, name: 'Position' },
+    { id: 1, name: 'Level' }
+  ],
+  CMP: [
+    { id: 0, name: 'Sustain' },
+    { id: 1, name: 'Level' },
+    { id: 2, name: 'Attack' },
+    { id: 3, name: 'Clipping' }
+  ],
+  EFX: [
+    { id: 0, name: 'Gain' },
+    { id: 1, name: 'Tone' },
+    { id: 2, name: 'Level' }
+  ],
+  AMP: [
+    { id: 0, name: 'Gain' },
+    { id: 1, name: 'Bass' },
+    { id: 2, name: 'Middle' },
+    { id: 3, name: 'Treble' },
+    { id: 4, name: 'Presence' },
+    { id: 5, name: 'Master' }
+  ],
+  EQ: [
+    { id: 0, name: '100Hz' },
+    { id: 1, name: '250Hz' },
+    { id: 2, name: '630Hz' },
+    { id: 3, name: '1.6kHz' },
+    { id: 4, name: '4kHz' },
+    { id: 5, name: '9kHz' }
+  ],
+  NG: [
+    { id: 0, name: 'Threshold' },
+    { id: 1, name: 'Decay' }
+  ],
+  MOD: [
+    { id: 0, name: 'Rate' },
+    { id: 1, name: 'Depth' },
+    { id: 2, name: 'Mix' },
+    { id: 3, name: 'Tone' }
+  ],
+  DLY: [
+    { id: 0, name: 'Time' },
+    { id: 1, name: 'Repeat' },
+    { id: 2, name: 'Mix' },
+    { id: 3, name: 'Tone' }
+  ],
+  RVB: [
+    { id: 0, name: 'Decay' },
+    { id: 1, name: 'Damp' },
+    { id: 2, name: 'Mix' },
+    { id: 3, name: 'Pre-Delay' }
+  ],
+  CAB: [
+    { id: 0, name: 'Level' },
+    { id: 1, name: 'Low Cut' },
+    { id: 2, name: 'High Cut' },
+    { id: 3, name: 'Mic Type' },
+    { id: 4, name: 'Distance' }
+  ],
+  IR: [
+    { id: 0, name: 'Level' },
+    { id: 1, name: 'Low Cut' },
+    { id: 2, name: 'High Cut' }
+  ],
+  SR: [
+    { id: 0, name: 'Send Level' },
+    { id: 1, name: 'Return Level' }
+  ],
+  VOL: [
+    { id: 0, name: 'Volume' },
+    { id: 1, name: 'Min Volume' }
+  ]
+};
+
+export function findBlockParam(blockInput?: string, paramInput?: string | number): { block: BlockType; paramId: number; paramName: string } {
+  let targetBlock: BlockType = 'AMP';
+  let targetParamStr: string | number = 'Gain';
+
+  if (blockInput && paramInput !== undefined) {
+    try {
+      targetBlock = idToBlockType(blockTypeToId(blockInput));
+    } catch {
+      targetBlock = 'AMP';
+    }
+    targetParamStr = paramInput;
+  } else if (blockInput) {
+    try {
+      const bId = blockTypeToId(blockInput);
+      targetBlock = idToBlockType(bId);
+      targetParamStr = NUX_BLOCK_PARAM_CATALOG[targetBlock]?.[0]?.name || 'Gain';
+    } catch {
+      targetParamStr = blockInput;
+      for (const b of BLOCK_LIST) {
+        const cat = NUX_BLOCK_PARAM_CATALOG[b];
+        if (cat && cat.some(p => p.name.toLowerCase() === blockInput.toLowerCase())) {
+          targetBlock = b;
+          break;
+        }
+      }
+    }
+  }
+
+  const catalog = NUX_BLOCK_PARAM_CATALOG[targetBlock] || NUX_BLOCK_PARAM_CATALOG['AMP'];
+  let paramId = 0;
+  let paramName = catalog[0]?.name || 'Gain';
+
+  if (typeof targetParamStr === 'number' || !isNaN(Number(targetParamStr))) {
+    const pNum = Number(targetParamStr);
+    const found = catalog.find(p => p.id === pNum);
+    if (found) {
+      paramId = found.id;
+      paramName = found.name;
+    } else {
+      paramId = pNum;
+      paramName = `Param #${pNum}`;
+    }
+  } else {
+    const searchStr = targetParamStr.toString().toLowerCase();
+    const found = catalog.find(p => p.name.toLowerCase() === searchStr || p.name.toLowerCase().includes(searchStr));
+    if (found) {
+      paramId = found.id;
+      paramName = found.name;
+    } else {
+      paramName = targetParamStr.toString();
+    }
+  }
+
+  return { block: targetBlock, paramId, paramName };
+}
+
 export function getModelName(block: BlockType, modelId: number): string {
   const list = NUX_MODEL_CATALOG[block];
   if (!list) return `Model #${modelId}`;
@@ -187,7 +319,7 @@ export function getModelName(block: BlockType, modelId: number): string {
   return found ? found.name : `Model #${modelId}`;
 }
 
-export function blockTypeToId(block: BlockType | number): number {
+export function blockTypeToId(block: BlockType | number | string): number {
   if (typeof block === 'number') {
     if (block < 0 || block >= BLOCK_LIST.length) {
       throw new Error(`Invalid block ID ${block}. Expected number between 0 and ${BLOCK_LIST.length - 1}.`);
