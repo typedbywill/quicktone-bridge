@@ -134,28 +134,15 @@ export class NuxMG30Client {
   }
 
   /**
-   * Selects an active scene (1, 2, or 3) on the hardware.
+   * Selects an active scene (1, 2, or 3) on the hardware via MIDI CC 80.
+   * Pedal capture: Scene1=0, Scene2=1, Scene3=2.
+   *
+   * Note: SysEx `0C 00 …` (seen in QuickTone.exe) requests scene dumps and can
+   * flood the MIDI input / hang port close — do not use it for select.
    */
   public selectScene(scene: number): void {
     const validScene = Math.min(3, Math.max(1, scene));
-    const sceneVal = validScene - 1;
-
-    // 1. SysEx Command 0x0C (SCENE_SELECT)
-    const sysexMsg = SysExEncoder.buildSceneSelectSysEx(validScene);
-    this.transport.send(sysexMsg);
-
-    // 2. MIDI CC 80 (0x50)
-    const cc80Msg = SysExEncoder.buildSceneSelect(validScene);
-    this.transport.send(cc80Msg);
-
-    // 3. MIDI CC 60 (0x3C)
-    const cc60Msg = SysExEncoder.buildControlChange(0x3C, sceneVal);
-    this.transport.send(cc60Msg);
-
-    // 4. Realtime Param Change on Block 13 (0x0D - Scene Block)
-    const paramMsg = SysExEncoder.buildParameterChange(13, 0, sceneVal);
-    this.transport.send(paramMsg);
-
+    this.transport.send(SysExEncoder.buildSceneSelect(validScene));
     this.emit('sceneChanged', { scene: validScene });
   }
 
@@ -364,6 +351,8 @@ export class NuxMG30Client {
       const ccVal = message[2] & 0x7F;
       if (ccNum === CC_MAPPINGS.EXPRESSION_PEDAL) {
         this.emit('expressionPedal', ccVal);
+      } else if (ccNum === CC_MAPPINGS.SCENE_SELECT && ccVal >= 0 && ccVal <= 2) {
+        this.emit('sceneChanged', { scene: ccVal + 1 });
       }
     }
   }

@@ -451,19 +451,10 @@ async function selectSceneAction(sceneNum: number) {
     process.exit(1);
   }
   const client = await requireConnection();
+  console.log(`🎬 Enviando CC 80 = ${sceneNum - 1} (Scene ${sceneNum})...`);
   client.selectScene(sceneNum);
   setPersistedActiveScene(sceneNum);
-
-  const sceneStates = getPersistedSceneBlockStates(sceneNum);
-  if (sceneStates && Object.keys(sceneStates).length > 0) {
-    for (const [block, enabled] of Object.entries(sceneStates)) {
-      try {
-        client.setBlockState(block as BlockType, enabled);
-      } catch {}
-    }
-  }
-
-  console.log(`🎬 Cena ${sceneNum} selecionada e ativada.`);
+  console.log(`🎬 Cena ${sceneNum} selecionada.`);
   await finishCommand(client);
 }
 

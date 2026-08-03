@@ -67,9 +67,14 @@ describe('NuxMG30Client Preset Navigation Tests', () => {
     const client = new NuxMG30Client({ transport });
 
     client.selectScene(2);
-    expect(transport.sentMessages.length).toBe(4);
-    expect(Array.from(transport.sentMessages[0])).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x01, 0xF7]); // SysEx
-    expect(Array.from(transport.sentMessages[1])).toEqual([0xB0, 0x00, 0x42]); // CC 0
+    expect(transport.sentMessages.length).toBe(1);
+    expect(Array.from(transport.sentMessages[0])).toEqual([0xB0, 0x50, 0x01]);
+
+    client.selectScene(3);
+    expect(Array.from(transport.sentMessages[1])).toEqual([0xB0, 0x50, 0x02]);
+
+    client.selectScene(1);
+    expect(Array.from(transport.sentMessages[2])).toEqual([0xB0, 0x50, 0x00]);
   });
 });
 

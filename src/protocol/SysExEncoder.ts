@@ -1,4 +1,4 @@
-import { NUX_SYSEX_HEADER, SYSEX_END, blockTypeToId, presetNameToProgramChange } from '../constants.js';
+import { NUX_SYSEX_HEADER, SYSEX_END, blockTypeToId, presetNameToProgramChange, CC_MAPPINGS } from '../constants.js';
 import { SysExCommand, SysExDirection, BlockType } from '../types.js';
 
 export class SysExEncoder {
@@ -85,21 +85,36 @@ export class SysExEncoder {
   }
 
   /**
-   * Select active scene (1, 2, 3) using SysEx Command 0x0C
+   * Request/sync scene bank data (QuickTone stack build around setCurrentSceneIndex).
+   * WARNING: this triggers large SysEx dump replies — not a realtime scene select.
+   * Prefer `buildSceneSelect` (CC 80) to change the active scene.
    */
   public static buildSceneSelectSysEx(sceneNumber: number): Uint8Array {
     const sceneVal = Math.min(2, Math.max(0, sceneNumber - 1));
-    return this.buildSysExPacket(SysExCommand.SCENE_SELECT, SysExDirection.HOST_TO_DEVICE, [sceneVal]);
+    return new Uint8Array([
+      ...NUX_SYSEX_HEADER,
+      SysExCommand.SCENE_SELECT,
+      0x00,
+      0x00,
+      sceneVal,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      SYSEX_END,
+    ]);
   }
 
   /**
-   * Select active scene (1, 2, 3) using MIDI CC 0 (0x00)
-   * CC 0 Value 0x41 (65) = Scene 1, 0x42 (66) = Scene 2, 0x43 (67) = Scene 3
+   * Select active scene (1, 2, 3) using MIDI CC 80 (0x50).
+   * Pedal-local capture: Val 0 = Scene 1, 1 = Scene 2, 2 = Scene 3.
    */
   public static buildSceneSelect(sceneNumber: number, channel: number = 0): Uint8Array {
     const validScene = Math.min(3, Math.max(1, sceneNumber));
-    const sceneVal = 0x40 + validScene;
-    return this.buildControlChange(0x00, sceneVal, channel);
+    const sceneVal = validScene - 1;
+    return this.buildControlChange(CC_MAPPINGS.SCENE_SELECT, sceneVal, channel);
   }
 
   /**

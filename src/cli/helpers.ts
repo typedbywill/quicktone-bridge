@@ -133,10 +133,12 @@ export function setPersistedSceneBlockStates(scene: number, blockStates: Record<
 export async function finishCommand(client?: NuxMG30Client, exitCode = 0): Promise<never> {
   if (client) {
     try {
-      await client.disconnect();
+      await Promise.race([
+        client.disconnect(),
+        new Promise<void>((resolve) => setTimeout(resolve, 300)),
+      ]);
     } catch {}
   }
-  await new Promise(resolve => setTimeout(resolve, 50));
   process.exit(exitCode);
 }
 

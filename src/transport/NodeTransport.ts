@@ -86,19 +86,35 @@ export class NodeTransport extends BaseTransport {
   }
 
   public async disconnect(): Promise<void> {
-    if (this.isConnected) {
-      if (this.input) {
+    if (!this.isConnected && !this.input && !this.output) {
+      return;
+    }
+
+    this.isConnected = false;
+
+    // On Windows, closePort() can block indefinitely if a large SysEx flood is
+    // in flight (e.g. scene-bank dumps). Drop listeners and release refs first;
+    // defer close so callers (CLI) can process.exit cleanly.
+    const input = this.input;
+    const output = this.output;
+    this.input = null;
+    this.output = null;
+
+    if (input) {
+      try {
+        input.removeAllListeners();
+      } catch {}
+      setImmediate(() => {
         try {
-          this.input.removeAllListeners();
-          this.input.closePort();
+          input.closePort();
         } catch {}
-      }
-      if (this.output) {
-        try {
-          this.output.closePort();
-        } catch {}
-      }
-      this.isConnected = false;
+      });
+    }
+
+    if (output) {
+      try {
+        output.closePort();
+      } catch {}
     }
   }
 
@@ -107,7 +123,11 @@ export class NodeTransport extends BaseTransport {
       throw new Error('Cannot send MIDI message: Transport is not connected.');
     }
     const arr = message instanceof Uint8Array ? Array.from(message) : message;
-    this.output.sendMessage(arr);
+    try {
+      this.output.sendMessage(arr);
+    } catch (err: any) {
+      throw new Error(`MIDI send failed: ${err?.message || err}`);
+    }
   }
 
   private findPortIndex(ports: MidiPortInfo[], identifier: number | string): number {
