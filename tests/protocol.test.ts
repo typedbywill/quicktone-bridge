@@ -10,6 +10,14 @@ describe('Protocol & Conversion Tests', () => {
     expect(Array.from(bytes)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0A, 0x00, 0xF7]);
   });
 
+  it('should encode block toggle to MIDI CC correctly', () => {
+    const modOn = SysExEncoder.buildBlockToggle('MOD', true);
+    expect(Array.from(modOn)).toEqual([0xB0, 0x06, 0x41]);
+
+    const modOff = SysExEncoder.buildBlockToggle('MOD', false);
+    expect(Array.from(modOff)).toEqual([0xB0, 0x06, 0x00]);
+  });
+
   it('should decode valid NUX SysEx packet', () => {
     const raw = [0xF0, 0x43, 0x58, 0x70, 0x0A, 0x02, 0x12, 0x34, 0xF7];
     const packet = SysExDecoder.parseSysEx(raw);

@@ -527,17 +527,40 @@ blockCmd
   });
 
 blockCmd
-  .command('state <id>')
-  .description('Exibe o estado (ligado/desligado) do bloco no patch ativo')
-  .action(async (id: string) => {
+  .command('state <id> [status]')
+  .description('Exibe ou altera o estado (ligado/desligado) do bloco no patch ativo')
+  .action(async (id: string, status?: string) => {
     const block = normalizeBlockId(id);
     const client = await requireConnection();
-    let isEnabled = getPersistedBlockState(block);
-    try {
-      const patch = await client.requestPatchDump(2000);
-      isEnabled = patch.blocks[block]?.enabled ?? false;
-    } catch {}
-    console.log(`⚡ Estado do bloco ${block} no patch ativo: [${isEnabled ? 'Ligado' : 'Desligado'}]`);
+    if (status !== undefined) {
+      const lower = status.toLowerCase();
+      let enable: boolean;
+      if (['on', 'enable', 'enabled', '1', 'ligado', 'true'].includes(lower)) {
+        enable = true;
+      } else if (['off', 'disable', 'disabled', '0', 'desligado', 'false'].includes(lower)) {
+        enable = false;
+      } else if (['toggle', 'alternar'].includes(lower)) {
+        let isEnabled = false;
+        try {
+          const patch = await client.requestPatchDump(2000);
+          isEnabled = patch.blocks[block]?.enabled ?? false;
+        } catch {}
+        enable = !isEnabled;
+      } else {
+        console.error(`❌ Estado inválido "${status}". Use: on, off ou toggle.`);
+        await finishCommand(client);
+        return;
+      }
+      client.setBlockState(block, enable);
+      console.log(`⚡ Bloco ${block} alterado para: [${enable ? 'Ligado' : 'Desligado'}]`);
+    } else {
+      let isEnabled = false;
+      try {
+        const patch = await client.requestPatchDump(2000);
+        isEnabled = patch.blocks[block]?.enabled ?? false;
+      } catch {}
+      console.log(`⚡ Estado do bloco ${block} no patch ativo: [${isEnabled ? 'Ligado' : 'Desligado'}]`);
+    }
     await finishCommand(client);
   });
 
@@ -545,8 +568,10 @@ blockCmd
   .command('enable <id>')
   .description('Ativa/liga um bloco de efeito')
   .action(async (id: string) => {
+    const block = normalizeBlockId(id);
     const client = await requireConnection();
-    console.log('❌ Funcionalidade não suportada: alteração de estado de blocos individuais em tempo real não é suportada pelo hardware NUX MG-30 via MIDI.');
+    client.setBlockState(block, true);
+    console.log(`⚡ Bloco ${block} ativado.`);
     await finishCommand(client);
   });
 
@@ -554,8 +579,10 @@ blockCmd
   .command('disable <id>')
   .description('Desativa/desliga um bloco de efeito')
   .action(async (id: string) => {
+    const block = normalizeBlockId(id);
     const client = await requireConnection();
-    console.log('❌ Funcionalidade não suportada: alteração de estado de blocos individuais em tempo real não é suportada pelo hardware NUX MG-30 via MIDI.');
+    client.setBlockState(block, false);
+    console.log(`⚡ Bloco ${block} desativado.`);
     await finishCommand(client);
   });
 
@@ -563,8 +590,16 @@ blockCmd
   .command('toggle <id>')
   .description('Alterna (toggle) o estado de um bloco de efeito')
   .action(async (id: string) => {
+    const block = normalizeBlockId(id);
     const client = await requireConnection();
-    console.log('❌ Funcionalidade não suportada: alternância de estado de blocos individuais em tempo real não é suportada pelo hardware NUX MG-30 via MIDI.');
+    let currentEnabled = false;
+    try {
+      const patch = await client.requestPatchDump(2000);
+      currentEnabled = patch.blocks[block]?.enabled ?? false;
+    } catch {}
+    const newState = !currentEnabled;
+    client.setBlockState(block, newState);
+    console.log(`⚡ Bloco ${block} alternado para [${newState ? 'Ligado' : 'Desligado'}].`);
     await finishCommand(client);
   });
 

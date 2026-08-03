@@ -30,12 +30,12 @@ export class SysExEncoder {
   }
 
   /**
-   * Toggle an effect block ON or OFF (0x02)
+   * Toggle an effect block ON or OFF using MIDI CC
    */
   public static buildBlockToggle(block: BlockType | number, enabled: boolean): Uint8Array {
     const blockId = blockTypeToId(block);
-    const state = enabled ? 0x01 : 0x00;
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.BLOCK_TOGGLE, SysExDirection.HOST_TO_DEVICE, blockId & 0x7F, state, SYSEX_END]);
+    const value = enabled ? 0x41 : 0x00;
+    return this.buildControlChange(blockId, value);
   }
 
   /**
