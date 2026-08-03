@@ -18,15 +18,15 @@ describe('Protocol & Conversion Tests', () => {
     expect(Array.from(modOff)).toEqual([0xB0, 0x06, 0x41]);
   });
 
-  it('should encode SysEx scene select packet correctly', () => {
+  it('should encode scene select MIDI CC 80 correctly', () => {
     const scene1 = SysExEncoder.buildSceneSelect(1);
-    expect(Array.from(scene1)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x5B, 0x00, 0xF7]);
+    expect(Array.from(scene1)).toEqual([0xB0, 0x50, 0x00]);
 
     const scene2 = SysExEncoder.buildSceneSelect(2);
-    expect(Array.from(scene2)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x5B, 0x01, 0xF7]);
+    expect(Array.from(scene2)).toEqual([0xB0, 0x50, 0x01]);
 
     const scene3 = SysExEncoder.buildSceneSelect(3);
-    expect(Array.from(scene3)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0C, 0x01, 0x5B, 0x02, 0xF7]);
+    expect(Array.from(scene3)).toEqual([0xB0, 0x50, 0x02]);
   });
 
   it('should decode valid NUX SysEx packet', () => {
