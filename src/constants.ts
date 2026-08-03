@@ -18,10 +18,11 @@ export const CC_MAPPINGS = {
   TAP_TEMPO: 0x40,        // 64
   TUNER_TOGGLE: 0x4B,     // 75
   CTRL_FOOTSWITCH: 0x50,  // 80
+  SCENE_SELECT: 0x51,     // 81 (0=Scene 1, 1=Scene 2, 2=Scene 3)
 } as const;
 
 /**
- * Block types in signal routing order & index mapping (0..9)
+ * Block types in signal routing order & index mapping
  */
 export const BLOCK_LIST: BlockType[] = [
   'WAH', // 0
@@ -33,7 +34,10 @@ export const BLOCK_LIST: BlockType[] = [
   'MOD', // 6
   'DLY', // 7
   'RVB', // 8
-  'CAB'  // 9
+  'CAB', // 9
+  'IR',  // 10
+  'SR',  // 11
+  'VOL'  // 12
 ];
 
 /**
@@ -164,6 +168,15 @@ export const NUX_MODEL_CATALOG: Record<BlockType, { id: number; name: string; de
     { id: 18, name: 'Amp SV410', description: '4x10 Ampeg SVT Bass Cabinet' },
     { id: 19, name: 'Amp SV212', description: '2x12 Ampeg SVT Bass Cabinet' },
     { id: 20, name: 'User IR 1-24', description: 'Custom User Impulse Response Slots' }
+  ],
+  IR: [
+    { id: 0, name: 'Default IR', description: 'Impulse Response Cabinet Model' }
+  ],
+  SR: [
+    { id: 0, name: 'Send/Return Loop', description: 'FX Loop Send & Return' }
+  ],
+  VOL: [
+    { id: 0, name: 'Volume Pedal', description: 'Master Volume Block' }
   ]
 };
 
@@ -176,12 +189,13 @@ export function getModelName(block: BlockType, modelId: number): string {
 
 export function blockTypeToId(block: BlockType | number): number {
   if (typeof block === 'number') {
-    if (block < 0 || block > 9) {
-      throw new Error(`Invalid block ID ${block}. Expected number between 0 and 9.`);
+    if (block < 0 || block >= BLOCK_LIST.length) {
+      throw new Error(`Invalid block ID ${block}. Expected number between 0 and ${BLOCK_LIST.length - 1}.`);
     }
     return block;
   }
-  const idx = BLOCK_LIST.indexOf(block.toUpperCase() as BlockType);
+  const str = block.toString().toUpperCase().replace('/', '');
+  const idx = BLOCK_LIST.findIndex(b => b.toUpperCase() === str || (b === 'SR' && str === 'S/R'));
   if (idx === -1) {
     throw new Error(`Unknown block name "${block}". Expected one of: ${BLOCK_LIST.join(', ')}.`);
   }

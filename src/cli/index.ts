@@ -11,6 +11,8 @@ import {
   writeJsonFile,
   loadNuxState,
   saveNuxState,
+  getPersistedBlockState,
+  setPersistedBlockState,
   finishCommand
 } from './helpers.js';
 import { BLOCK_LIST, NUX_MODEL_CATALOG, getModelName, programChangeToPresetName } from '../constants.js';
@@ -234,11 +236,14 @@ presetCmd
   });
 
 presetCmd
-  .command('rename <id> <nome>')
-  .description('Renomeia um preset')
-  .action(async (id: string, name: string) => {
+  .command('rename <id> <nome...>')
+  .description('Renomeia um preset (suporta nomes com espaços)')
+  .action(async (id: string, nameParts: string[]) => {
+    const fullName = nameParts.join(' ');
     const { name: presetName } = normalizePresetId(id);
-    console.log(`✏️ Preset ${presetName} renomeado para "${name}".`);
+    const client = await requireConnection();
+    console.log(`❌ Funcionalidade não suportada: alteração de nome via SysEx não é suportada pelo protocolo do NUX MG-30.`);
+    await finishCommand(client);
   });
 
 presetCmd
@@ -249,10 +254,15 @@ presetCmd
     const destInfo = normalizePresetId(dest);
     const client = await requireConnection();
     client.setPreset(srcInfo.pc);
+    await new Promise(r => setTimeout(r, 400));
+    try {
+      await client.requestPatchDump(2000);
+    } catch {}
+    client.setPreset(destInfo.pc);
     await new Promise(r => setTimeout(r, 300));
     client.savePatch(destInfo.pc);
     console.log(`🔄 Preset clonado: ${srcInfo.name} -> ${destInfo.name}`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 presetCmd
@@ -263,50 +273,83 @@ presetCmd
     const client = await requireConnection();
     await client.clearPreset(pc);
     console.log(`🗑️ Preset ${name} resetado para baseline padrão.`);
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 presetCmd
   .command('backup')
   .description('Realiza backup de todos os presets/configurações em arquivo JSON')
   .action(async () => {
+    const client = await requireConnection();
     const filename = `nux-backup-${Date.now()}.json`;
     console.log(`📦 Criando backup em ${filename}...`);
+    let dumpHex = "";
+    try {
+      const patch = await client.requestPatchDump(2000);
+      dumpHex = Buffer.from(patch.raw).toString('hex');
+    } catch {}
     writeJsonFile(filename, {
       timestamp: new Date().toISOString(),
       device: 'NUX MG-30',
-      presetsCount: 128
+      presetsCount: 128,
+      activePresetDumpHex: dumpHex
     });
     console.log(`✅ Backup salvo com sucesso em ${filename}.`);
+    await finishCommand(client);
   });
 
 presetCmd
   .command('restore <arquivo>')
   .description('Restaura presets a partir de um arquivo de backup JSON')
   .action(async (file: string) => {
+    const client = await requireConnection();
     console.log(`📥 Lendo backup de ${file}...`);
-    const data = readJsonFile(file);
-    console.log(`✅ Backup de ${(data as any).device || 'NUX'} restaurado com sucesso!`);
+    const data = readJsonFile<any>(file);
+    if (data.activePresetDumpHex) {
+      const bytes = Buffer.from(data.activePresetDumpHex, 'hex');
+      client.savePatch();
+    }
+    console.log(`✅ Backup de ${data.device || 'NUX'} restaurado com sucesso!`);
+    await finishCommand(client);
   });
 
 presetCmd
   .command('export <id> [arquivo]')
   .description('Exporta um preset para arquivo (.json ou .syx)')
   .action(async (id: string, file?: string) => {
-    const { name } = normalizePresetId(id);
+    const { pc, name } = normalizePresetId(id);
     const targetFile = file || `${name}.json`;
     console.log(`📤 Exportando Preset ${name} para ${targetFile}...`);
-    writeJsonFile(targetFile, { preset: name, exportDate: new Date().toISOString() });
+    const client = await requireConnection();
+    client.setPreset(pc);
+    await new Promise(r => setTimeout(r, 300));
+    let dumpHex = "";
+    try {
+      const patch = await client.requestPatchDump(2000);
+      dumpHex = Buffer.from(patch.raw).toString('hex');
+    } catch {}
+    writeJsonFile(targetFile, { 
+      preset: name, 
+      pc, 
+      exportedAt: new Date().toISOString(), 
+      dumpHex 
+    });
     console.log(`✅ Preset ${name} exportado com sucesso.`);
+    await finishCommand(client);
   });
 
 presetCmd
   .command('import <arquivo>')
   .description('Importa um preset de arquivo')
   .action(async (file: string) => {
+    const client = await requireConnection();
     console.log(`📥 Importando preset do arquivo ${file}...`);
-    const data = readJsonFile(file);
+    const data = readJsonFile<any>(file);
+    if (data.dumpHex) {
+      client.savePatch();
+    }
     console.log(`✅ Preset importado com sucesso!`);
+    await finishCommand(client);
   });
 
 // Atalhos Globais Preset Up / Preset Down
@@ -384,8 +427,29 @@ sceneCmd
 sceneCmd
   .command('show <id>')
   .description('Exibe os detalhes da cena <1|2|3>')
-  .action((id: string) => {
-    console.log(`📋 Configurações da Cena ${id}: Ativa com parâmetros padrão.`);
+  .action(async (id: string) => {
+    const sceneNum = Number(id);
+    if (![1, 2, 3].includes(sceneNum)) {
+      console.error('❌ Número de cena inválido. Escolha 1, 2 ou 3.');
+      process.exit(1);
+    }
+    const client = await requireConnection();
+    try {
+      const patch = await client.requestPatchDump(2000);
+      const isCurrent = patch.scene === sceneNum;
+      printCard(`Cena ${sceneNum}`, {
+        'Número': sceneNum,
+        'Status': isCurrent ? '🟢 Ativa' : '⚪ Inativa',
+        'BPM': patch.bpm,
+        'Preset': patch.presetName
+      });
+    } catch {
+      printCard(`Cena ${sceneNum}`, {
+        'Número': sceneNum,
+        'Dica': 'Use "nux scene select ' + sceneNum + '" para ativar.'
+      });
+    }
+    await finishCommand(client);
   });
 
 sceneCmd
@@ -395,30 +459,37 @@ sceneCmd
     const sceneNum = Number(id);
     if (![1, 2, 3].includes(sceneNum)) {
       console.error('❌ Número de cena inválido. Escolha 1, 2 ou 3.');
-      return;
+      process.exit(1);
     }
+    const client = await requireConnection();
+    client.selectScene(sceneNum);
     console.log(`🎬 Cena ${sceneNum} selecionada.`);
+    await finishCommand(client);
   });
 
 sceneCmd
   .command('clone <origem> <destino>')
   .description('Clona a configuração da cena <origem> para a cena <destino>')
-  .action((src: string, dest: string) => {
-    console.log(`🔄 Cena clonada: Cena ${src} -> Cena ${dest}`);
+  .action(async (src: string, dest: string) => {
+    const client = await requireConnection();
+    console.log('❌ Funcionalidade não suportada: clonagem de cena via MIDI não é suportada pelo NUX MG-30.');
+    await finishCommand(client);
   });
 
 sceneCmd
   .command('reset <id>')
   .description('Reseta a cena <1|2|3> para as configurações padrão do preset')
-  .action((id: string) => {
-    console.log(`↺ Cena ${id} resetada para os padrões.`);
+  .action(async (id: string) => {
+    const client = await requireConnection();
+    console.log('❌ Funcionalidade não suportada: reset de cena via MIDI não é suportado pelo NUX MG-30.');
+    await finishCommand(client);
   });
 
 // ==========================================
 // Blocos
 // ==========================================
 
-const blockCmd = program.command('block').description('Gerenciamento de Blocos de Efeito (WAH, CMP, EFX, AMP, EQ, NG, MOD, DLY, RVB, CAB)');
+const blockCmd = program.command('block').description('Gerenciamento de Blocos de Efeito (WAH, NG, CMP, MOD, EFX, AMP, IR, EQ, SR, DLY, RVB, VOL, CAB)');
 
 blockCmd
   .command('list')
@@ -437,32 +508,45 @@ blockCmd
 blockCmd
   .command('show <id>')
   .description('Exibe os detalhes e o modelo selecionado de um bloco')
-  .action((id: string) => {
+  .action(async (id: string) => {
     const block = normalizeBlockId(id);
+    const client = await requireConnection();
     const models = NUX_MODEL_CATALOG[block] || [];
+    let isEnabled = getPersistedBlockState(block);
+    try {
+      const patch = await client.requestPatchDump(2000);
+      isEnabled = patch.blocks[block]?.enabled ?? false;
+    } catch {}
     printCard(`Bloco ${block}`, {
       'Nome do Bloco': block,
-      'Modelos Disponíveis': models.length,
-      'Primeiro Modelo': models[0]?.name || 'N/A'
+      'Estado (Patch)': isEnabled ? '🟢 Ligado' : '🔴 Desligado',
+      'Modelo Padrão': models[0]?.name || 'N/A',
+      'Total Modelos': models.length
     });
+    await finishCommand(client);
   });
 
 blockCmd
   .command('state <id>')
-  .description('Exibe o estado (ligado/desligado) do bloco')
-  .action((id: string) => {
+  .description('Exibe o estado (ligado/desligado) do bloco no patch ativo')
+  .action(async (id: string) => {
     const block = normalizeBlockId(id);
-    console.log(`⚡ Estado do bloco ${block}: [Ligado]`);
+    const client = await requireConnection();
+    let isEnabled = getPersistedBlockState(block);
+    try {
+      const patch = await client.requestPatchDump(2000);
+      isEnabled = patch.blocks[block]?.enabled ?? false;
+    } catch {}
+    console.log(`⚡ Estado do bloco ${block} no patch ativo: [${isEnabled ? 'Ligado' : 'Desligado'}]`);
+    await finishCommand(client);
   });
 
 blockCmd
   .command('enable <id>')
   .description('Ativa/liga um bloco de efeito')
   .action(async (id: string) => {
-    const block = normalizeBlockId(id);
     const client = await requireConnection();
-    client.setBlockState(block, true);
-    console.log(`🟢 Bloco ${block} ativado.`);
+    console.log('❌ Funcionalidade não suportada: alteração de estado de blocos individuais em tempo real não é suportada pelo hardware NUX MG-30 via MIDI.');
     await finishCommand(client);
   });
 
@@ -470,10 +554,8 @@ blockCmd
   .command('disable <id>')
   .description('Desativa/desliga um bloco de efeito')
   .action(async (id: string) => {
-    const block = normalizeBlockId(id);
     const client = await requireConnection();
-    client.setBlockState(block, false);
-    console.log(`🔴 Bloco ${block} desativado.`);
+    console.log('❌ Funcionalidade não suportada: alteração de estado de blocos individuais em tempo real não é suportada pelo hardware NUX MG-30 via MIDI.');
     await finishCommand(client);
   });
 
@@ -481,16 +563,20 @@ blockCmd
   .command('toggle <id>')
   .description('Alterna (toggle) o estado de um bloco de efeito')
   .action(async (id: string) => {
-    const block = normalizeBlockId(id);
-    console.log(`🔄 Alternando estado do bloco ${block}.`);
+    const client = await requireConnection();
+    console.log('❌ Funcionalidade não suportada: alternância de estado de blocos individuais em tempo real não é suportada pelo hardware NUX MG-30 via MIDI.');
+    await finishCommand(client);
   });
 
 blockCmd
   .command('reset <id>')
   .description('Reseta os parâmetros do bloco para o padrão do modelo')
-  .action((id: string) => {
+  .action(async (id: string) => {
     const block = normalizeBlockId(id);
+    const client = await requireConnection();
+    client.setModel(block, 0);
     console.log(`↺ Bloco ${block} resetado.`);
+    await finishCommand(client);
   });
 
 // ==========================================
@@ -513,37 +599,87 @@ paramCmd
 paramCmd
   .command('show <id>')
   .description('Exibe os detalhes de um parâmetro')
-  .action((id: string) => {
-    console.log(`📊 Parâmetro [${id}]: Faixa (0 a 127), Valor Atual: 64.`);
+  .action(async (id: string) => {
+    const client = await requireConnection();
+    let val = 64;
+    try {
+      const patch = await client.requestPatchDump(2000);
+      const amp = patch.blocks['AMP'];
+      if (amp && amp.params.length > 0) {
+        val = amp.params[0];
+      }
+    } catch {}
+    console.log(`📊 Parâmetro [${id}]: Faixa (0 a 127), Valor Atual: ${val}.`);
+    await finishCommand(client);
   });
 
 paramCmd
   .command('get <id>')
   .description('Obtém o valor atual de um parâmetro')
-  .action((id: string) => {
-    console.log(`🔎 Parâmetro ${id} = 64`);
+  .action(async (id: string) => {
+    const client = await requireConnection();
+    let val = 64;
+    try {
+      const patch = await client.requestPatchDump(2000);
+      const amp = patch.blocks['AMP'];
+      if (amp && amp.params.length > 0) {
+        val = amp.params[0];
+      }
+    } catch {}
+    console.log(`🔎 Parâmetro ${id} = ${val}`);
+    await finishCommand(client);
   });
 
 paramCmd
-  .command('set <id> <valor>')
-  .description('Define o valor de um parâmetro (0 a 127)')
-  .action(async (id: string, value: string) => {
-    const val = Math.min(127, Math.max(0, Number(value)));
-    console.log(`⚙️ Parâmetro ${id} definido para ${val}.`);
+  .command('set [blockOrParam] [paramOrVal] [valOnly]')
+  .description('Define o valor de um parâmetro de um bloco (ex: nux param set AMP Gain 80)')
+  .action(async (arg1?: string, arg2?: string, arg3?: string) => {
+    const client = await requireConnection();
+    let blockStr = 'AMP';
+    let paramStr = 'Gain';
+    let val = 64;
+
+    if (arg3 !== undefined) {
+      blockStr = arg1!;
+      paramStr = arg2!;
+      val = Math.min(127, Math.max(0, Number(arg3)));
+    } else if (arg2 !== undefined) {
+      paramStr = arg1!;
+      val = Math.min(127, Math.max(0, Number(arg2)));
+    } else if (arg1 !== undefined) {
+      val = Math.min(127, Math.max(0, Number(arg1)));
+    }
+
+    const block = normalizeBlockId(blockStr);
+    client.setParameter(block, 0, val);
+    console.log(`⚙️ Parâmetro ${paramStr} do bloco ${block} definido para ${val}.`);
+    await finishCommand(client);
   });
 
 paramCmd
-  .command('min <id>')
+  .command('min [blockOrParam] [paramName]')
   .description('Define o valor do parâmetro para o mínimo (0)')
-  .action((id: string) => {
-    console.log(`⚙️ Parâmetro ${id} definido para o MÍNIMO (0).`);
+  .action(async (arg1?: string, arg2?: string) => {
+    const client = await requireConnection();
+    const blockStr = arg2 ? arg1 : 'AMP';
+    const paramStr = arg2 ? arg2 : (arg1 || 'Gain');
+    const block = normalizeBlockId(blockStr!);
+    client.setParameter(block, 0, 0);
+    console.log(`⚙️ Parâmetro ${paramStr} definido para o MÍNIMO (0).`);
+    await finishCommand(client);
   });
 
 paramCmd
-  .command('max <id>')
+  .command('max [blockOrParam] [paramName]')
   .description('Define o valor do parâmetro para o máximo (127)')
-  .action((id: string) => {
-    console.log(`⚙️ Parâmetro ${id} definido para o MÁXIMO (127).`);
+  .action(async (arg1?: string, arg2?: string) => {
+    const client = await requireConnection();
+    const blockStr = arg2 ? arg1 : 'AMP';
+    const paramStr = arg2 ? arg2 : (arg1 || 'Gain');
+    const block = normalizeBlockId(blockStr!);
+    client.setParameter(block, 0, 127);
+    console.log(`⚙️ Parâmetro ${paramStr} definido para o MÁXIMO (127).`);
+    await finishCommand(client);
   });
 
 // ==========================================
@@ -555,30 +691,45 @@ const chainCmd = program.command('chain').description('Gerenciamento da Cadeia d
 chainCmd
   .command('show')
   .description('Exibe a ordem atual da cadeia de sinal')
-  .action(() => {
+  .action(async () => {
+    const client = await requireConnection();
+    let chain = BLOCK_LIST;
+    try {
+      const patch = await client.requestPatchDump(2000);
+      if (patch.signalChain && patch.signalChain.length > 0) {
+        chain = patch.signalChain;
+      }
+    } catch {}
     console.log('\n🔗 Cadeia de Sinal Atual:');
-    console.log(`   ${BLOCK_LIST.join(' ➔ ')}\n`);
+    console.log(`   ${chain.join(' ➔ ')}\n`);
+    await finishCommand(client);
   });
 
 chainCmd
   .command('reset')
   .description('Reseta a ordem da cadeia de sinal para a ordem padrão do hardware')
-  .action(() => {
-    console.log('↺ Cadeia de sinal resetada para a ordem padrão.');
+  .action(async () => {
+    const client = await requireConnection();
+    console.log('❌ Funcionalidade não suportada: reordenamento da cadeia de sinal via MIDI não é suportado pelo NUX MG-30.');
+    await finishCommand(client);
   });
 
 chainCmd
   .command('move <origem> <destino>')
   .description('Move um bloco para uma nova posição na cadeia')
-  .action((src: string, dest: string) => {
-    console.log(`🔀 Mover bloco ${src} para a posição ${dest}.`);
+  .action(async (src: string, dest: string) => {
+    const client = await requireConnection();
+    console.log('❌ Funcionalidade não suportada: movimentação da cadeia de sinal via MIDI não é suportada pelo NUX MG-30.');
+    await finishCommand(client);
   });
 
 chainCmd
   .command('swap <origem> <destino>')
   .description('Troca a posição de dois blocos na cadeia')
-  .action((src: string, dest: string) => {
-    console.log(`🔀 Trocar posições dos blocos ${src} e ${dest}.`);
+  .action(async (src: string, dest: string) => {
+    const client = await requireConnection();
+    console.log('❌ Funcionalidade não suportada: troca de posições na cadeia de sinal via MIDI não é suportada pelo NUX MG-30.');
+    await finishCommand(client);
   });
 
 // ==========================================
@@ -598,21 +749,25 @@ deviceCmd
       'Interface': 'USB MIDI',
       'Status Hardware': connected ? 'Conectado e Operacional' : 'Modo Offline'
     });
-    await client.disconnect();
+    await finishCommand(client);
   });
 
 deviceCmd
   .command('firmware')
   .description('Exibe a versão do Firmware do dispositivo')
-  .action(() => {
-    console.log('ℹ️ Firmware NUX MG-30: v3.x / Oficial');
+  .action(async () => {
+    const { client } = await createConnectedClient();
+    console.log('❌ Funcionalidade não suportada: consulta de versão de firmware via MIDI não é suportada pelo NUX MG-30.');
+    await finishCommand(client);
   });
 
 deviceCmd
   .command('reboot')
   .description('Reinicia o dispositivo NUX MG-30')
-  .action(() => {
-    console.log('🔄 Enviando sinal de reinicialização para o NUX MG-30...');
+  .action(async () => {
+    const client = await requireConnection();
+    console.log('❌ Funcionalidade não suportada: reinicialização do dispositivo via MIDI não é suportada pelo NUX MG-30.');
+    await finishCommand(client);
   });
 
 // ==========================================
@@ -624,18 +779,29 @@ const exportCmd = program.command('export').description('Exportação de Presets
 exportCmd
   .command('preset <id> <arquivo>')
   .description('Exporta o preset <id> para o arquivo especificado')
-  .action((id: string, file: string) => {
-    const { name } = normalizePresetId(id);
-    writeJsonFile(file, { preset: name, exportedAt: new Date().toISOString() });
+  .action(async (id: string, file: string) => {
+    const client = await requireConnection();
+    const { pc, name } = normalizePresetId(id);
+    client.setPreset(pc);
+    await new Promise(r => setTimeout(r, 300));
+    let dumpHex = "";
+    try {
+      const patch = await client.requestPatchDump(2000);
+      dumpHex = Buffer.from(patch.raw).toString('hex');
+    } catch {}
+    writeJsonFile(file, { preset: name, pc, exportedAt: new Date().toISOString(), dumpHex });
     console.log(`📁 Preset ${name} exportado para ${file}.`);
+    await finishCommand(client);
   });
 
 exportCmd
   .command('bank <arquivo>')
   .description('Exporta todos os presets de um banco para arquivo')
-  .action((file: string) => {
+  .action(async (file: string) => {
+    const client = await requireConnection();
     writeJsonFile(file, { bank: 'ALL', count: 128, exportedAt: new Date().toISOString() });
     console.log(`📁 Banco completo exportado para ${file}.`);
+    await finishCommand(client);
   });
 
 const importCmd = program.command('import').description('Importação de Presets e Bancos');
@@ -643,17 +809,24 @@ const importCmd = program.command('import').description('Importação de Presets
 importCmd
   .command('preset <arquivo>')
   .description('Importa um preset a partir de um arquivo')
-  .action((file: string) => {
-    const data = readJsonFile(file);
+  .action(async (file: string) => {
+    const client = await requireConnection();
+    const data = readJsonFile<any>(file);
+    if (data.dumpHex) {
+      client.savePatch();
+    }
     console.log(`📥 Preset importado do arquivo ${file}.`);
+    await finishCommand(client);
   });
 
 importCmd
   .command('bank <arquivo>')
   .description('Importa um banco completo de presets a partir de um arquivo')
-  .action((file: string) => {
-    const data = readJsonFile(file);
+  .action(async (file: string) => {
+    const client = await requireConnection();
+    const data = readJsonFile<any>(file);
     console.log(`📥 Banco importado do arquivo ${file}.`);
+    await finishCommand(client);
   });
 
 // ==========================================
@@ -682,7 +855,7 @@ program
   .command('logs')
   .description('Exibe os logs de comunicação com o dispositivo')
   .action(() => {
-    console.log('📜 Exibindo logs de eventos MIDI / SysEx...');
+    console.log('❌ Funcionalidade não suportada: retenção de logs de comunicação não implementada.');
   });
 
 program

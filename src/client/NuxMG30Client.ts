@@ -134,6 +134,14 @@ export class NuxMG30Client {
   }
 
   /**
+   * Selects an active scene (1, 2, or 3) on the hardware.
+   */
+  public selectScene(scene: number): void {
+    const msg = SysExEncoder.buildSceneSelect(scene);
+    this.transport.send(msg);
+  }
+
+  /**
    * Toggles an effect block ON or OFF (e.g. 'WAH', 'CMP', 'EFX', 'AMP', 'EQ', 'NG', 'MOD', 'DLY', 'RVB', 'CAB').
    */
   public setBlockState(block: BlockType | number, enabled: boolean): void {

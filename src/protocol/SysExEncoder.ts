@@ -84,6 +84,14 @@ export class SysExEncoder {
   }
 
   /**
+   * Select active scene (1, 2, 3) using CC 81 (0x51)
+   */
+  public static buildSceneSelect(sceneNumber: number, channel: number = 0): Uint8Array {
+    const sceneVal = Math.min(2, Math.max(0, sceneNumber - 1));
+    return this.buildControlChange(0x51, sceneVal, channel);
+  }
+
+  /**
    * Build MIDI Program Change message (0xC0 [presetIndex])
    */
   public static buildProgramChange(presetIndex: number, channel: number = 0): Uint8Array {

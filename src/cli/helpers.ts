@@ -10,8 +10,25 @@ const STATE_FILE_PATH = path.join(os.homedir(), '.nux-mg30-state.json');
 export interface NuxState {
   currentPresetPc: number;
   currentPresetName: string;
+  blockStates: Record<string, boolean>;
   lastUpdated: string;
 }
+
+const DEFAULT_BLOCK_STATES: Record<string, boolean> = {
+  WAH: false,
+  NG: true,
+  CMP: false,
+  MOD: false,
+  EFX: false,
+  AMP: true,
+  IR: true,
+  EQ: false,
+  SR: false,
+  DLY: false,
+  RVB: false,
+  VOL: true,
+  CAB: true
+};
 
 export function loadNuxState(): NuxState {
   try {
@@ -19,27 +36,46 @@ export function loadNuxState(): NuxState {
       const content = fs.readFileSync(STATE_FILE_PATH, 'utf-8');
       const parsed = JSON.parse(content);
       if (typeof parsed.currentPresetPc === 'number' && parsed.currentPresetPc >= 0 && parsed.currentPresetPc <= 127) {
-        return parsed;
+        return {
+          currentPresetPc: parsed.currentPresetPc,
+          currentPresetName: parsed.currentPresetName || '01A',
+          blockStates: { ...DEFAULT_BLOCK_STATES, ...(parsed.blockStates || {}) },
+          lastUpdated: parsed.lastUpdated || new Date().toISOString()
+        };
       }
     }
   } catch {}
   return {
     currentPresetPc: 0,
     currentPresetName: '01A',
+    blockStates: { ...DEFAULT_BLOCK_STATES },
     lastUpdated: new Date().toISOString()
   };
 }
 
-export function saveNuxState(pc: number): void {
+export function saveNuxState(pc: number, blockStates?: Record<string, boolean>): void {
   try {
+    const currentState = loadNuxState();
     const info = programChangeToPresetName(pc);
     const state: NuxState = {
       currentPresetPc: pc,
       currentPresetName: info.name,
+      blockStates: blockStates ? { ...currentState.blockStates, ...blockStates } : (pc !== currentState.currentPresetPc ? { ...DEFAULT_BLOCK_STATES } : currentState.blockStates),
       lastUpdated: new Date().toISOString()
     };
     fs.writeFileSync(STATE_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
   } catch {}
+}
+
+export function getPersistedBlockState(block: BlockType): boolean {
+  const state = loadNuxState();
+  return state.blockStates[block] ?? false;
+}
+
+export function setPersistedBlockState(block: BlockType, enabled: boolean): void {
+  const state = loadNuxState();
+  state.blockStates[block] = enabled;
+  saveNuxState(state.currentPresetPc, state.blockStates);
 }
 
 export async function finishCommand(client?: NuxMG30Client, exitCode = 0): Promise<never> {

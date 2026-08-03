@@ -11,7 +11,7 @@ describe('Patch Serialization Tests', () => {
     const patch = PatchDecoder.decode(dummyBytes);
     expect(patch.bpm).toBe(120);
     expect(patch.scene).toBe(2);
-    expect(patch.signalChain.length).toBe(10);
+    expect(patch.signalChain.length).toBe(13);
     expect(patch.blocks.AMP).toBeDefined();
     expect(patch.blocks.CAB).toBeDefined();
   });

@@ -37,7 +37,10 @@ export type BlockType =
   | 'MOD' 
   | 'DLY' 
   | 'RVB' 
-  | 'CAB';
+  | 'CAB'
+  | 'IR'
+  | 'SR'
+  | 'VOL';
 
 export interface EffectBlockState {
   id: BlockType;
