@@ -276,9 +276,13 @@ presetCmd
   .description('Renomeia um preset (suporta nomes com espaços)')
   .action(async (id: string, nameParts: string[]) => {
     const fullName = nameParts.join(' ');
-    const { name: presetName } = normalizePresetId(id);
+    const { pc, name: presetSlot } = normalizePresetId(id);
     const client = await requireConnection();
-    console.log(`❌ Funcionalidade não suportada: alteração de nome via SysEx não é suportada pelo protocolo do NUX MG-30.`);
+    client.setPreset(pc);
+    await new Promise(r => setTimeout(r, 400));
+    await client.setPresetName(fullName);
+    client.savePatch(pc);
+    console.log(`✅ Preset ${presetSlot} renomeado para "${fullName}" e salvo no NUX MG-30!`);
     await finishCommand(client);
   });
 

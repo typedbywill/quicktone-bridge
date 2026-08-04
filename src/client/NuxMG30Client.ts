@@ -200,6 +200,23 @@ export class NuxMG30Client {
     this.emit('patchSaved', { presetName: presetInfo.name, index: pc });
   }
 
+  /**
+   * Set user patch name by modifying offsets 106..121 in the decoded scene dump.
+   */
+  public async setPresetName(
+    name: string,
+    options: SceneWriteOptions = {}
+  ): Promise<void> {
+    const cleanName = name.slice(0, 16);
+    await this.modifyActiveScene((decoded) => {
+      for (let i = 0; i < 16; i++) {
+        if (106 + i < decoded.length) {
+          decoded[106 + i] = i < cleanName.length ? cleanName.charCodeAt(i) : 0;
+        }
+      }
+    }, options);
+  }
+
   public async clearPreset(preset?: number | string, options: { keepAmpCab?: boolean } = {}): Promise<void> {
     if (preset !== undefined) {
       this.setPreset(preset);
