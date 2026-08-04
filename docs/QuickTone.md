@@ -39,10 +39,10 @@ Large SysEx payloads pack two 8-bit bytes into three 7-bit bytes. Algorithm and 
 
 | Feature | Mechanism |
 | ------- | --------- |
-| `nux block set` | MIDI CC ([Parameters.md](Parameters.md)) |
+| `nux block set` | SysEx `0B` scene write (RMW) |
 | `nux block get` | SysEx `0C` dump + unpack + knob layout |
-| `nux block model` | SysEx model select |
-| `nux scene select` | CC 80 |
+| `nux block model` | SysEx `0B` model byte in scene body |
+| `nux scene select` | CC 80 (+ tracked scene for `0C`) |
 | `nux preset load` | Program Change |
 | `nux sync` | Scene dump request / decode |
 

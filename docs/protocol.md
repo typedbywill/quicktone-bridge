@@ -109,7 +109,7 @@ These  are all the commands that I have identified so far. This is by no means a
 | `6C`    | Unknown                                                           |
 | `7E`    | Patch status (default/user)                                       |
 
-> **Parameters / knobs:** there is no SysEx “set param” command in this table. Realtime knob control uses MIDI CC ([ControlChanges.md](ControlChanges.md), [Parameters.md](Parameters.md)). Reading knobs uses the decoded body of `0B` / `0C` scene dumps (layout below).
+> **Parameters / knobs:** realtime edits use SysEx `0B` read-modify-write of the scene body ([Parameters.md](Parameters.md)). MIDI CC ([ControlChanges.md](ControlChanges.md)) is the QuickTone Custom MIDI map for external controllers; it is not sufficient alone over USB on the MG-30. Reading knobs uses the decoded body of `0B` / `0C` scene dumps (layout below).
 
 ## 03: Get/Set Tempo
 

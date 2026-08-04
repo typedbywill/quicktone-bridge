@@ -80,6 +80,41 @@ export const SCENE_DUMP_KNOB_SLOTS: Record<string, number> = {
   VOL: 2,
 };
 
+/** Bit set on a scene-dump model byte when the effect block is OFF. */
+export const SCENE_MODEL_OFF_BIT = 0x40;
+
+/**
+ * Byte offset of a block's model id inside the unpacked scene body (protocol.md §0B).
+ * CAB is not present in the 12 model slots (IR covers cab/IR).
+ */
+export function sceneModelOffset(block: BlockType): number {
+  const idx = SCENE_DUMP_BLOCK_ORDER.indexOf(block);
+  if (idx < 0) {
+    throw new Error(`Block ${block} has no model slot in the scene dump (use IR for cab/IR).`);
+  }
+  return idx;
+}
+
+/**
+ * Byte offset of a knob value inside the unpacked scene body.
+ * Layout: 12 model bytes, then per block [count][slot0..N-1].
+ */
+export function sceneKnobOffset(block: BlockType, paramId: number): number {
+  let offset = 12;
+  for (const b of SCENE_DUMP_BLOCK_ORDER) {
+    const slots = SCENE_DUMP_KNOB_SLOTS[b] ?? 0;
+    offset += 1; // count byte
+    if (b === block) {
+      if (paramId < 0 || paramId >= slots) {
+        throw new Error(`Block ${block} param ${paramId} out of range (0..${slots - 1}).`);
+      }
+      return offset + paramId;
+    }
+    offset += slots;
+  }
+  throw new Error(`Block ${block} has no knob slots in the scene dump.`);
+}
+
 /**
  * Block types in signal routing order & index mapping
  */

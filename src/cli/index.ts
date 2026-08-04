@@ -534,9 +534,11 @@ sceneCmd
     setPersistedActiveScene(destNum);
     for (const [block, enabled] of Object.entries(srcStates)) {
       try {
-        client.setBlockState(block as BlockType, enabled);
+        await client.setBlockState(block as BlockType, enabled, { reload: false });
       } catch {}
     }
+    client.setPreset(client.getActivePresetIndex());
+    await new Promise((r) => setTimeout(r, 400));
     console.log(`📋 Configuração da Cena ${srcNum} clonada com sucesso para a Cena ${destNum}!`);
     await finishCommand(client);
   });
@@ -557,9 +559,11 @@ sceneCmd
     setPersistedActiveScene(sceneNum);
     for (const [block, enabled] of Object.entries(defaultStates)) {
       try {
-        client.setBlockState(block as BlockType, enabled);
+        await client.setBlockState(block as BlockType, enabled, { reload: false });
       } catch {}
     }
+    client.setPreset(client.getActivePresetIndex());
+    await new Promise((r) => setTimeout(r, 400));
     console.log(`🔄 Cena ${sceneNum} resetada para as configurações padrão.`);
     await finishCommand(client);
   });
@@ -600,7 +604,7 @@ async function applyBlockState(id: string, status?: string): Promise<void> {
       await finishCommand(client);
       return;
     }
-    client.setBlockState(block, enable);
+    await client.setBlockState(block, enable);
     setPersistedBlockState(block, enable);
     console.log(`⚡ Bloco ${block} alterado para: [${enable ? 'Ligado' : 'Desligado'}]`);
   } else {
@@ -683,7 +687,7 @@ blockCmd
   .action(async (id: string) => {
     const block = normalizeBlockId(id);
     const client = await requireConnection();
-    client.setBlockState(block, true);
+    await client.setBlockState(block, true);
     setPersistedBlockState(block, true);
     console.log(`⚡ Bloco ${block} ativado.`);
     await finishCommand(client);
@@ -695,7 +699,7 @@ blockCmd
   .action(async (id: string) => {
     const block = normalizeBlockId(id);
     const client = await requireConnection();
-    client.setBlockState(block, false);
+    await client.setBlockState(block, false);
     setPersistedBlockState(block, false);
     console.log(`⚡ Bloco ${block} desativado.`);
     await finishCommand(client);
@@ -709,7 +713,7 @@ blockCmd
     const client = await requireConnection();
     const currentEnabled = getPersistedBlockState(block);
     const newState = !currentEnabled;
-    client.setBlockState(block, newState);
+    await client.setBlockState(block, newState);
     setPersistedBlockState(block, newState);
     console.log(`⚡ Bloco ${block} alternado para [${newState ? 'Ligado' : 'Desligado'}].`);
     await finishCommand(client);
@@ -742,7 +746,7 @@ blockCmd
     const client = await requireConnection();
     try {
       const model = findModel(block, selector);
-      client.setModel(block, model.id);
+      await client.setModel(block, model.id);
       console.log(`🎸 Bloco ${block} → modelo [${model.id}] ${model.name}`);
     } catch (err: any) {
       console.error(`\n❌ ${err?.message || err}`);
@@ -850,9 +854,9 @@ blockCmd
     const val = Math.min(100, Math.max(0, Number(valInput)));
     const { block, paramId, paramName } = findBlockParam(bInput, pInput);
     try {
-      client.setParameter(block, paramId, val);
+      await client.setParameter(block, paramId, val);
       setPersistedParamState(block, paramId, val);
-      console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para ${val} (MIDI CC).`);
+      console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para ${val} (SysEx 0B).`);
     } catch (err: any) {
       console.error(`\n❌ ${err?.message || err}`);
       await finishCommand(client, 1);
@@ -867,7 +871,7 @@ blockCmd
     const client = await requireConnection();
     const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
     try {
-      client.setParameter(block, paramId, 0);
+      await client.setParameter(block, paramId, 0);
       setPersistedParamState(block, paramId, 0);
       console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÍNIMO (0).`);
     } catch (err: any) {
@@ -884,7 +888,7 @@ blockCmd
     const client = await requireConnection();
     const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
     try {
-      client.setParameter(block, paramId, 100);
+      await client.setParameter(block, paramId, 100);
       setPersistedParamState(block, paramId, 100);
       console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÁXIMO (100).`);
     } catch (err: any) {
@@ -900,7 +904,7 @@ blockCmd
   .action(async (id: string) => {
     const block = normalizeBlockId(id);
     const client = await requireConnection();
-    client.setModel(block, 0);
+    await client.setModel(block, 0);
     console.log(`↺ Bloco ${block} resetado.`);
     await finishCommand(client);
   });

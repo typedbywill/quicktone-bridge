@@ -4,16 +4,21 @@ import { WebMidiTransport } from '../transport/WebMidiTransport.js';
 import { SysExEncoder } from '../protocol/SysExEncoder.js';
 import { SysExDecoder } from '../protocol/SysExDecoder.js';
 import { PatchDecoder } from '../patch/PatchDecoder.js';
-import { 
-  programChangeToPresetName, 
-  presetNameToProgramChange, 
-  blockTypeToId, 
-  idToBlockType, 
-  CC_MAPPINGS, 
-  DEFAULT_INPUT_PORT_NAME, 
-  DEFAULT_OUTPUT_PORT_NAME 
+import { unpackNuxPayload, packNuxPayload } from '../protocol/nuxEncoding.js';
+import {
+  programChangeToPresetName,
+  presetNameToProgramChange,
+  blockTypeToId,
+  idToBlockType,
+  CC_MAPPINGS,
+  DEFAULT_INPUT_PORT_NAME,
+  DEFAULT_OUTPUT_PORT_NAME,
+  PARAM_CC_MAX,
+  sceneModelOffset,
+  sceneKnobOffset,
+  SCENE_MODEL_OFF_BIT,
 } from '../constants.js';
-import { PatchData, PresetInfo, BlockType, SysExPacket, SysExCommand, NuxClientEvents } from '../types.js';
+import { PatchData, PresetInfo, BlockType, SysExCommand, NuxClientEvents } from '../types.js';
 
 export interface NuxClientOptions {
   transport?: BaseTransport;
@@ -21,6 +26,13 @@ export interface NuxClientOptions {
   outputPortName?: string;
   autoHeartbeat?: boolean;
   heartbeatIntervalMs?: number;
+}
+
+export interface SceneWriteOptions {
+  /** Reload preset via Program Change so 0C edit buffer matches saved data (default true). */
+  reload?: boolean;
+  /** Settle time after SysEx write before reload/read (ms). */
+  settleMs?: number;
 }
 
 export class NuxMG30Client {
@@ -31,6 +43,8 @@ export class NuxMG30Client {
   private heartbeatIntervalMs: number;
   private heartbeatTimer: any = null;
   private activePresetIndex = 0;
+  /** 0-based scene index matching SysEx dumps (0=Scene1 … 2=Scene3). */
+  private activeSceneIndex = 0;
   private patchResolver: ((patch: PatchData) => void) | null = null;
 
   private eventListeners: { [K in keyof NuxClientEvents]?: Function[] } = {};
@@ -38,13 +52,10 @@ export class NuxMG30Client {
   constructor(options: NuxClientOptions = {}) {
     if (options.transport) {
       this.transport = options.transport;
+    } else if (typeof window !== 'undefined' && typeof (navigator as any)?.requestMIDIAccess !== 'undefined') {
+      this.transport = new WebMidiTransport();
     } else {
-      // Auto-detect environment
-      if (typeof window !== 'undefined' && typeof (navigator as any)?.requestMIDIAccess !== 'undefined') {
-        this.transport = new WebMidiTransport();
-      } else {
-        this.transport = new NodeTransport();
-      }
+      this.transport = new NodeTransport();
     }
 
     this.inputPortName = options.inputPortName || DEFAULT_INPUT_PORT_NAME;
@@ -55,9 +66,6 @@ export class NuxMG30Client {
     this.transport.onMessage(this.handleMidiMessage.bind(this));
   }
 
-  /**
-   * Connects to the NUX MG-30 device via MIDI.
-   */
   public async connect(): Promise<void> {
     await this.transport.connect(this.inputPortName, this.outputPortName);
     this.emit('connected', { inputPort: this.inputPortName, outputPort: this.outputPortName });
@@ -67,66 +75,47 @@ export class NuxMG30Client {
     }
   }
 
-  /**
-   * Disconnects from the NUX MG-30 device.
-   */
   public async disconnect(): Promise<void> {
     this.stopHeartbeatTimer();
     await this.transport.disconnect();
     this.emit('disconnected');
   }
 
-  /**
-   * Switches to a specific preset by 0-indexed integer (0..127) or string name (e.g. "01A", "05C").
-   */
   public setPreset(preset: number | string): void {
     let pc: number;
     if (typeof preset === 'string') {
       pc = presetNameToProgramChange(preset);
     } else {
-      pc = preset & 0x7F;
+      pc = preset & 0x7f;
     }
 
     this.activePresetIndex = pc;
-    const msg = SysExEncoder.buildProgramChange(pc);
-    this.transport.send(msg);
+    this.transport.send(SysExEncoder.buildProgramChange(pc));
 
     const presetInfo: PresetInfo = {
       index: pc,
-      ...programChangeToPresetName(pc)
+      ...programChangeToPresetName(pc),
     };
     this.emit('presetChanged', presetInfo);
   }
 
-  /**
-   * Returns current active preset 0-indexed position (0..127).
-   */
   public getActivePresetIndex(): number {
     return this.activePresetIndex;
   }
 
-  /**
-   * Returns current active preset information.
-   */
   public getActivePresetInfo(): PresetInfo {
     return {
       index: this.activePresetIndex,
-      ...programChangeToPresetName(this.activePresetIndex)
+      ...programChangeToPresetName(this.activePresetIndex),
     };
   }
 
-  /**
-   * Advances to the next preset (or by specified step count).
-   */
   public presetUp(step: number = 1): PresetInfo {
     const nextPc = (this.activePresetIndex + step + 128 * Math.ceil(Math.abs(step))) % 128;
     this.setPreset(nextPc);
     return this.getActivePresetInfo();
   }
 
-  /**
-   * Recedes to the previous preset (or by specified step count).
-   */
   public presetDown(step: number = 1): PresetInfo {
     const prevPc = (this.activePresetIndex - step + 128 * Math.ceil(Math.abs(step))) % 128;
     this.setPreset(prevPc);
@@ -134,104 +123,113 @@ export class NuxMG30Client {
   }
 
   /**
-   * Selects an active scene (1, 2, or 3) on the hardware via MIDI CC 80.
-   * Pedal capture: Scene1=0, Scene2=1, Scene3=2.
-   *
-   * Note: SysEx `0C 00 …` (seen in QuickTone.exe) requests scene dumps and can
-   * flood the MIDI input / hang port close — do not use it for select.
+   * Selects scene 1/2/3 via MIDI CC 80 and tracks which scene `0C` dumps request.
    */
   public selectScene(scene: number): void {
     const validScene = Math.min(3, Math.max(1, scene));
+    this.activeSceneIndex = validScene - 1;
     this.transport.send(SysExEncoder.buildSceneSelect(validScene));
     this.emit('sceneChanged', { scene: validScene });
   }
 
   /**
-   * Toggles an effect block ON or OFF (e.g. 'WAH', 'CMP', 'EFX', 'AMP', 'EQ', 'NG', 'MOD', 'DLY', 'RVB', 'CAB').
+   * Toggle block ON/OFF by rewriting scene SysEx (`0B`).
    */
-  public setBlockState(block: BlockType | number, enabled: boolean): void {
-    const blockId = blockTypeToId(block);
-    const blockName = idToBlockType(blockId);
-    const msg = SysExEncoder.buildBlockToggle(blockId, enabled);
-    this.transport.send(msg);
-
+  public async setBlockState(
+    block: BlockType | number,
+    enabled: boolean,
+    options: SceneWriteOptions = {}
+  ): Promise<void> {
+    const blockName = idToBlockType(blockTypeToId(block));
+    await this.modifyActiveScene((decoded) => {
+      const idx = sceneModelOffset(blockName);
+      const modelId = decoded[idx] & 0x3f;
+      decoded[idx] = enabled ? modelId : modelId | SCENE_MODEL_OFF_BIT;
+    }, options);
     this.emit('blockToggled', { block: blockName, enabled });
   }
 
   /**
-   * Selects an effect model for a specific block.
+   * Select block model by rewriting scene SysEx (`0B`).
+   * Note: SysEx `0x03` is tempo in protocol.md — not model select.
    */
-  public setModel(block: BlockType | number, modelId: number): void {
-    const blockId = blockTypeToId(block);
-    const blockName = idToBlockType(blockId);
-    const msg = SysExEncoder.buildModelSelect(blockId, modelId);
-    this.transport.send(msg);
-
+  public async setModel(
+    block: BlockType | number,
+    modelId: number,
+    options: SceneWriteOptions = {}
+  ): Promise<void> {
+    const blockName = idToBlockType(blockTypeToId(block));
+    await this.modifyActiveScene((decoded) => {
+      const idx = sceneModelOffset(blockName);
+      const off = decoded[idx] & SCENE_MODEL_OFF_BIT;
+      decoded[idx] = off | (modelId & 0x3f);
+    }, options);
     this.emit('modelChanged', { block: blockName, modelId });
   }
 
   /**
-   * Sets a parameter value for a block via MIDI CC (0..100).
-   * See docs/ControlChanges.md — e.g. AMP Gain → CC 24.
+   * Set a knob by rewriting scene SysEx (`0B`). Also emits Custom-MIDI CC best-effort.
+   * Range: 0..100.
    */
-  public setParameter(block: BlockType | number, paramId: number, value: number): void {
-    const blockId = blockTypeToId(block);
-    const blockName = idToBlockType(blockId);
-    const msg = SysExEncoder.buildParameterChange(blockId, paramId, value);
-    this.transport.send(msg);
+  public async setParameter(
+    block: BlockType | number,
+    paramId: number,
+    value: number,
+    options: SceneWriteOptions = {}
+  ): Promise<void> {
+    const blockName = idToBlockType(blockTypeToId(block));
+    const clamped = Math.min(PARAM_CC_MAX, Math.max(0, value | 0));
 
-    this.emit('paramChanged', { block: blockName, paramId, value: msg[2] });
+    try {
+      this.transport.send(SysExEncoder.buildParameterChange(blockName, paramId, clamped));
+    } catch {
+      // Blocks without CC mapping (e.g. CAB) skip the CC path.
+    }
+
+    await this.modifyActiveScene((decoded) => {
+      decoded[sceneKnobOffset(blockName, paramId)] = clamped;
+    }, options);
+
+    this.emit('paramChanged', { block: blockName, paramId, value: clamped });
   }
 
-  /**
-   * Saves/stores the current edited patch into target hardware preset slot.
-   */
   public savePatch(preset: number | string = this.activePresetIndex): void {
-    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : (preset & 0x7F);
+    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : preset & 0x7f;
     const presetInfo = programChangeToPresetName(pc);
-    const msg = SysExEncoder.buildSavePatch(pc);
-    this.transport.send(msg);
-
+    this.transport.send(SysExEncoder.buildSavePatch(pc));
     this.emit('patchSaved', { presetName: presetInfo.name, index: pc });
   }
 
-  /**
-   * Clears/resets a preset slot to a completely clean slate (disables all effect blocks, resets AMP/CAB to clean baseline).
-   */
   public async clearPreset(preset?: number | string, options: { keepAmpCab?: boolean } = {}): Promise<void> {
     if (preset !== undefined) {
       this.setPreset(preset);
-      await new Promise(r => setTimeout(r, 800));
+      await this.sleep(800);
     }
 
-    // Disable all optional effect blocks with generous pause between messages
     const blocksToDisable: BlockType[] = ['WAH', 'CMP', 'EFX', 'EQ', 'NG', 'MOD', 'DLY', 'RVB'];
     for (const block of blocksToDisable) {
-      this.setBlockState(block, false);
-      await new Promise(r => setTimeout(r, 300));
+      await this.setBlockState(block, false, { reload: false });
+      await this.sleep(200);
     }
 
     if (!options.keepAmpCab) {
-      // Set AMP & CAB to clean default baseline (Class A30 Vox AC30 #7 or Deluxe Rvb #1 & 1x12 Cab #1)
-      this.setModel('AMP', 1); // Deluxe Rvb
-      await new Promise(r => setTimeout(r, 400));
-      this.setBlockState('AMP', true);
-      await new Promise(r => setTimeout(r, 400));
-      this.setModel('CAB', 1); // Black 112
-      await new Promise(r => setTimeout(r, 400));
-      this.setBlockState('CAB', true);
-      await new Promise(r => setTimeout(r, 400));
+      await this.setModel('AMP', 1, { reload: false });
+      await this.setBlockState('AMP', true, { reload: false });
     }
 
-    // Save cleared state to hardware memory
+    this.setPreset(preset !== undefined ? preset : this.activePresetIndex);
+    await this.sleep(500);
     this.savePatch(preset !== undefined ? preset : this.activePresetIndex);
-    await new Promise(r => setTimeout(r, 800));
+    await this.sleep(800);
   }
 
   /**
-   * Requests the full 222-byte patch dump from the device.
+   * Request scene dump for the active (or given 0-based) scene.
    */
-  public async requestPatchDump(timeoutMs: number = 3000): Promise<PatchData> {
+  public async requestPatchDump(
+    timeoutMs: number = 3000,
+    sceneIndex: number = this.activeSceneIndex
+  ): Promise<PatchData> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.patchResolver = null;
@@ -243,44 +241,62 @@ export class NuxMG30Client {
         resolve(patch);
       };
 
-      const req = SysExEncoder.buildPatchDumpRequest();
-      this.transport.send(req);
+      this.transport.send(SysExEncoder.buildPatchDumpRequest(sceneIndex));
     });
   }
 
   /**
-   * Sends a heartbeat ping message (0x0E) to verify device responsiveness.
+   * Read-modify-write active preset/scene via SysEx `0B`, then optionally reload PC.
    */
+  public async modifyActiveScene(
+    mutator: (decoded: Uint8Array, meta: { preset: number; sceneIndex: number }) => void,
+    options: SceneWriteOptions = {}
+  ): Promise<void> {
+    const settleMs = options.settleMs ?? 350;
+    const reload = options.reload ?? true;
+
+    const patch = await this.requestPatchDump(2500);
+    if (!patch.raw || patch.raw.length < 12) {
+      throw new Error('Scene dump too short to modify.');
+    }
+
+    const preset = patch.raw[0] & 0x7f;
+    const sceneIndex = Math.min(2, Math.max(0, patch.raw[1] & 0x7f));
+    this.activePresetIndex = preset;
+    this.activeSceneIndex = sceneIndex;
+
+    const decoded = unpackNuxPayload(patch.raw.subarray(2));
+    if (decoded.length < 90) {
+      throw new Error('Unpacked scene body too short to modify.');
+    }
+
+    mutator(decoded, { preset, sceneIndex });
+
+    this.transport.send(SysExEncoder.buildSceneDataSet(preset, sceneIndex, packNuxPayload(decoded)));
+    await this.sleep(settleMs);
+
+    if (reload) {
+      this.setPreset(preset);
+      await this.sleep(Math.max(400, settleMs));
+    }
+  }
+
   public sendHeartbeat(): void {
-    const ping = SysExEncoder.buildHeartbeatPing();
-    this.transport.send(ping);
+    this.transport.send(SysExEncoder.buildHeartbeatPing());
   }
 
-  /**
-   * Sends a custom Control Change message.
-   */
   public sendCC(ccNumber: number, value: number): void {
-    const cc = SysExEncoder.buildControlChange(ccNumber, value);
-    this.transport.send(cc);
+    this.transport.send(SysExEncoder.buildControlChange(ccNumber, value));
   }
 
-  /**
-   * Gets the list of available input MIDI ports.
-   */
   public listInputPorts() {
     return this.transport.listInputPorts();
   }
 
-  /**
-   * Gets the list of available output MIDI ports.
-   */
   public listOutputPorts() {
     return this.transport.listOutputPorts();
   }
 
-  /**
-   * Attach event listener
-   */
   public on<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
     if (!this.eventListeners[event]) {
       this.eventListeners[event] = [];
@@ -289,14 +305,15 @@ export class NuxMG30Client {
     return this;
   }
 
-  /**
-   * Remove event listener
-   */
   public off<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
     if (this.eventListeners[event]) {
-      this.eventListeners[event] = this.eventListeners[event]!.filter(l => l !== listener);
+      this.eventListeners[event] = this.eventListeners[event]!.filter((l) => l !== listener);
     }
     return this;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private emit<K extends keyof NuxClientEvents>(event: K, ...args: Parameters<NuxClientEvents[K]>): void {
@@ -312,8 +329,7 @@ export class NuxMG30Client {
     }
   }
 
-  private handleMidiMessage(deltaTime: number, message: Uint8Array): void {
-    // 1. Check for SysEx
+  private handleMidiMessage(_deltaTime: number, message: Uint8Array): void {
     const packet = SysExDecoder.parseSysEx(message);
     if (packet) {
       this.emit('sysex', packet);
@@ -323,9 +339,15 @@ export class NuxMG30Client {
         packet.command === SysExCommand.SCENE_SAVED_DATA ||
         packet.command === SysExCommand.HANDSHAKE_PATCH_DUMP
       ) {
+        // Ignore short set-ack frames (e.g. 0B 03 …).
+        if (packet.payload.length < 90) {
+          return;
+        }
         const patch = PatchDecoder.decode(packet.payload);
-        const presetInfo = programChangeToPresetName(this.activePresetIndex);
-        patch.presetName = presetInfo.name;
+        patch.presetName = programChangeToPresetName(this.activePresetIndex).name;
+        if (patch.raw.length >= 2) {
+          this.activeSceneIndex = Math.min(2, Math.max(0, patch.raw[1] & 0x7f));
+        }
 
         this.emit('patchReceived', patch);
         if (this.patchResolver) {
@@ -338,25 +360,23 @@ export class NuxMG30Client {
       return;
     }
 
-    // 2. Check for Program Change (PC)
     if (SysExDecoder.isProgramChange(message)) {
-      const pc = message[1] & 0x7F;
+      const pc = message[1] & 0x7f;
       this.activePresetIndex = pc;
-      const info: PresetInfo = {
+      this.emit('presetChanged', {
         index: pc,
-        ...programChangeToPresetName(pc)
-      };
-      this.emit('presetChanged', info);
+        ...programChangeToPresetName(pc),
+      });
       return;
     }
 
-    // 3. Check for Control Change (CC)
     if (SysExDecoder.isControlChange(message)) {
-      const ccNum = message[1] & 0x7F;
-      const ccVal = message[2] & 0x7F;
+      const ccNum = message[1] & 0x7f;
+      const ccVal = message[2] & 0x7f;
       if (ccNum === CC_MAPPINGS.EXPRESSION_PEDAL) {
         this.emit('expressionPedal', ccVal);
       } else if (ccNum === CC_MAPPINGS.SCENE_SELECT && ccVal >= 0 && ccVal <= 2) {
+        this.activeSceneIndex = ccVal;
         this.emit('sceneChanged', { scene: ccVal + 1 });
       }
     }

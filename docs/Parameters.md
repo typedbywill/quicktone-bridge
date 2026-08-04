@@ -2,47 +2,45 @@
 
 How `nux block set` / `nux block get` read and write effect knobs on the NUX MG-30.
 
-## Set → MIDI Control Change
+## Set → SysEx scene write (`0B`)
 
-Knob changes are **not** SysEx. They use the MIDI CC map from QuickTone Settings → Custom MIDI ([ControlChanges.md](ControlChanges.md)).
+Knob / model / block ON-OFF changes are written by **read-modify-write** of the scene body:
 
-| Block | Knob indices | Base CC | Example |
-| ----- | ------------ | ------- | ------- |
-| WAH   | 0–1          | 12      | Knob 1 → CC 12 |
-| CMP   | 0–3          | 14      | Sustain → CC 14 |
-| EFX   | 0–5          | 18      | Drive → CC 18 |
-| AMP   | 0–7          | 24      | **Gain → CC 24** |
-| EQ    | 0–11         | 32      | Band 1 → CC 32 |
-| NG    | 0–3          | 44      | Sens → CC 44 |
-| MOD   | 0–5          | 48      | Rate → CC 48 |
-| DLY   | 0–7          | 54      | Level → CC 54 |
-| RVB   | 0–3          | 62      | Mix → CC 62 |
-| IR    | 0–5          | 66      | Level (knob 3) → CC 68 |
-| SR    | 0–2          | 72      | Send → CC 72 |
-| VOL   | 0–2          | 75      | Min → CC 75 |
-| CAB   | —            | —       | No dedicated CCs (use IR) |
+1. Dump scene via `0C`
+2. Unpack 7-bit payload, patch the model byte or knob slot
+3. Pack and **SET** via SysEx `0B` (saved scene data)
+4. Reload the preset (Program Change) so the edit buffer matches
 
-Wire format:
+MIDI CC from [ControlChanges.md](ControlChanges.md) is still emitted as a best-effort companion, but on USB the MG-30 does **not** apply those CCs to the edit buffer (verified against hardware). The Custom MIDI map remains useful for external controllers when configured in QuickTone.
 
-```
-B0 <cc> <value>
-```
+| Block | Knob indices | Scene body | Example |
+| ----- | ------------ | ---------- | ------- |
+| WAH   | 0–1          | slots after models | Knob 1 |
+| CMP   | 0–3          | … | Sustain |
+| EFX   | 0–5          | … | Drive |
+| AMP   | 0–7          | … | **Gain** |
+| EQ    | 0–11         | … | Band 1 |
+| NG    | 0–3          | … | Sens |
+| MOD   | 0–5          | … | Rate |
+| DLY   | 0–7          | … | Level |
+| RVB   | 0–3          | … | Mix |
+| IR    | 0–5          | … | Level (knob 3) |
+| SR    | 0–2          | … | Send |
+| VOL   | 0–2          | … | Min |
+| CAB   | —            | — | No scene model slot (use IR) |
 
-Example — set AMP Gain to 80:
+**Value range:** 0–100. The CLI clamps to this range.
 
-```
-B0 18 50
-```
-
-(`0x18` = 24, `0x50` = 80)
-
-**Value range:** 0–100 (as in ControlChanges.md). The CLI clamps to this range.
-
-CCs 0–11 select the **model** for each block (not knobs). The bridge CLI uses SysEx `MODEL_SELECT` via `nux block model` / `client.setModel`.
+Model select and block enable bits live in the first 12 decoded bytes (`bit 0x40` = OFF). There is no dedicated SysEx “MODEL_SELECT” command — protocol `0x03` is tempo.
 
 ### Legacy note
 
-An earlier bridge build sent SysEx `F0 43 58 70 01 01 <block> <param> <value> F7`. That command is **not** in [protocol.md](protocol.md) and does not work on the MG-30. It was removed in favor of MIDI CC.
+Earlier bridge builds tried:
+
+- SysEx `F0 43 58 70 01 01 <block> <param> <value> F7` (not in protocol.md)
+- MIDI CC alone for knobs
+
+Neither reliably updates the MG-30 over USB. Use the `0B` path above.
 
 ## Get → Scene dump SysEx
 
@@ -63,7 +61,7 @@ nux block params              # catalog per block
 nux block params AMP
 nux block show AMP            # state, model, knobs
 nux block get AMP Gain
-nux block set AMP Gain 80     # sends B0 18 50
+nux block set AMP Gain 80     # scene SysEx 0B RMW (+ optional CC)
 nux block min AMP Gain        # 0
 nux block max AMP Gain        # 100
 nux block model AMP           # list amp models

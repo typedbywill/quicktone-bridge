@@ -32,22 +32,46 @@ export class SysExEncoder {
   }
 
   /**
-   * Request current scene edit buffer (protocol.md command `0C`).
-   * Query: F0 43 58 70 0C 00 00 01 00 00 00 00 00 00 F7
+   * Request scene data (protocol.md command `0C`).
+   * Query: F0 43 58 70 0C 00 00 <scene0..2> 00 00 00 00 00 00 F7
+   * `sceneIndex` is 0-based (0=Scene1, 1=Scene2, 2=Scene3).
    */
-  public static buildPatchDumpRequest(): Uint8Array {
+  public static buildPatchDumpRequest(sceneIndex: number = 0): Uint8Array {
+    const scene = Math.min(2, Math.max(0, sceneIndex | 0));
     return new Uint8Array([
       ...NUX_SYSEX_HEADER,
       SysExCommand.SCENE_CURRENT_DATA,
       0x00,
       0x00,
-      0x01,
+      scene,
       0x00,
       0x00,
       0x00,
       0x00,
       0x00,
       0x00,
+      SYSEX_END,
+    ]);
+  }
+
+  /**
+   * Write saved scene body (protocol.md command `0B` set).
+   * `encodedBody` must already be 7-bit packed (no preset/scene prefix).
+   */
+  public static buildSceneDataSet(
+    preset: number,
+    sceneIndex: number,
+    encodedBody: Uint8Array | number[]
+  ): Uint8Array {
+    const scene = Math.min(2, Math.max(0, sceneIndex | 0));
+    const body = encodedBody instanceof Uint8Array ? encodedBody : new Uint8Array(encodedBody);
+    return new Uint8Array([
+      ...NUX_SYSEX_HEADER,
+      SysExCommand.SCENE_SAVED_DATA,
+      SysExDirection.HOST_TO_DEVICE,
+      preset & 0x7f,
+      scene,
+      ...body,
       SYSEX_END,
     ]);
   }

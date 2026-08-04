@@ -3,6 +3,7 @@ import { NuxMG30Client } from '../src/client/NuxMG30Client.js';
 import { BaseTransport } from '../src/transport/BaseTransport.js';
 import { MidiPortInfo } from '../src/types.js';
 import { findBlockParam, NUX_BLOCK_PARAM_CATALOG } from '../src/constants.js';
+import { SysExEncoder } from '../src/protocol/SysExEncoder.js';
 
 class DummyTransport extends BaseTransport {
   public sentMessages: Uint8Array[] = [];
@@ -115,13 +116,24 @@ describe('NUX Block Parameter Resolution Tests', () => {
   });
 });
 
-describe('NuxMG30Client Parameter CC Tests', () => {
-  it('should send AMP Gain as MIDI CC 24', () => {
-    const transport = new DummyTransport();
-    const client = new NuxMG30Client({ transport });
+describe('NuxMG30Client Parameter Encoding Tests', () => {
+  it('should encode AMP Gain as MIDI CC 24 (best-effort companion to SysEx 0B)', () => {
+    expect(Array.from(SysExEncoder.buildParameterChange('AMP', 0, 80))).toEqual([0xB0, 24, 80]);
+  });
 
-    client.setParameter('AMP', 0, 80);
-    expect(transport.sentMessages.length).toBe(1);
-    expect(Array.from(transport.sentMessages[0])).toEqual([0xB0, 24, 80]);
+  it('should encode scene dump request for the selected scene index', () => {
+    expect(Array.from(SysExEncoder.buildPatchDumpRequest(0))).toEqual([
+      0xf0, 0x43, 0x58, 0x70, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf7,
+    ]);
+    expect(Array.from(SysExEncoder.buildPatchDumpRequest(1))[7]).toBe(0x01);
+    expect(Array.from(SysExEncoder.buildPatchDumpRequest(2))[7]).toBe(0x02);
+  });
+
+  it('should encode 0B scene data set with preset/scene prefix', () => {
+    const body = [0x01, 0x02, 0x03];
+    const msg = SysExEncoder.buildSceneDataSet(4, 1, body);
+    expect(Array.from(msg.slice(0, 8))).toEqual([0xf0, 0x43, 0x58, 0x70, 0x0b, 0x01, 0x04, 0x01]);
+    expect(Array.from(msg.slice(8, 11))).toEqual(body);
+    expect(msg[msg.length - 1]).toBe(0xf7);
   });
 });
