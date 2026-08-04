@@ -22,7 +22,7 @@ import {
   DEFAULT_BLOCK_STATES,
   finishCommand
 } from './helpers.js';
-import { BLOCK_LIST, NUX_MODEL_CATALOG, NUX_BLOCK_PARAM_CATALOG, findBlockParam, getModelName, programChangeToPresetName } from '../constants.js';
+import { BLOCK_LIST, NUX_MODEL_CATALOG, NUX_BLOCK_PARAM_CATALOG, findBlockParam, findModel, getModelName, programChangeToPresetName } from '../constants.js';
 import { BlockType } from '../types.js';
 
 const program = new Command();
@@ -47,7 +47,7 @@ const COMMAND_GROUPS: Record<string, { label: string; emoji: string; commands: s
   control: {
     label: 'Controle do Dispositivo',
     emoji: '🎛️',
-    commands: ['preset', 'preset-up', 'preset-down', 'scene', 'scene-up', 'scene-down', 'block', 'param', 'chain', 'device'],
+    commands: ['preset', 'scene', 'block', 'chain', 'device'],
   },
   files: {
     label: 'Arquivos',
@@ -388,59 +388,6 @@ presetCmd
     await finishCommand(client);
   });
 
-// Atalhos Globais Preset Up / Preset Down
-program
-  .command('preset-up [id]')
-  .description('Atalho para avançar preset (nux preset up)')
-  .action(async (id?: string) => {
-    const client = await requireConnection();
-    let currentPc: number;
-    let fromName: string;
-
-    if (id) {
-      const normalized = normalizePresetId(id);
-      currentPc = normalized.pc;
-      fromName = normalized.name;
-    } else {
-      const state = loadNuxState();
-      currentPc = state.currentPresetPc;
-      fromName = state.currentPresetName;
-    }
-
-    const nextPc = (currentPc + 1) % 128;
-    const nextInfo = programChangeToPresetName(nextPc);
-    client.setPreset(nextPc);
-    saveNuxState(nextPc);
-    console.log(`⬆️ Preset avançado: ${fromName} ➔ ${nextInfo.name} (PC: ${nextPc})`);
-    await finishCommand(client);
-  });
-
-program
-  .command('preset-down [id]')
-  .description('Atalho para recuar preset (nux preset down)')
-  .action(async (id?: string) => {
-    const client = await requireConnection();
-    let currentPc: number;
-    let fromName: string;
-
-    if (id) {
-      const normalized = normalizePresetId(id);
-      currentPc = normalized.pc;
-      fromName = normalized.name;
-    } else {
-      const state = loadNuxState();
-      currentPc = state.currentPresetPc;
-      fromName = state.currentPresetName;
-    }
-
-    const prevPc = (currentPc - 1 + 128) % 128;
-    const prevInfo = programChangeToPresetName(prevPc);
-    client.setPreset(prevPc);
-    saveNuxState(prevPc);
-    console.log(`⬇️ Preset recuado: ${fromName} ➔ ${prevInfo.name} (PC: ${prevPc})`);
-    await finishCommand(client);
-  });
-
 // ==========================================
 // Cenas
 // ==========================================
@@ -617,34 +564,13 @@ sceneCmd
     await finishCommand(client);
   });
 
-// Atalhos Globais Scene Up / Scene Down
-program
-  .command('scene-up')
-  .description('Atalho para avançar cena (nux scene up)')
-  .action(async () => {
-    const current = getPersistedActiveScene();
-    const next = current >= 3 ? 1 : current + 1;
-    console.log(`⬆️ Avançando cena: Scene ${current} ➔ Scene ${next}`);
-    await selectSceneAction(next);
-  });
-
-program
-  .command('scene-down')
-  .description('Atalho para recuar cena (nux scene down)')
-  .action(async () => {
-    const current = getPersistedActiveScene();
-    const prev = current <= 1 ? 3 : current - 1;
-    console.log(`⬇️ Recuando cena: Scene ${current} ➔ Scene ${prev}`);
-    await selectSceneAction(prev);
-  });
-
 // ==========================================
 // Blocos
 // ==========================================
 
 const blockCmd = program
   .command('block')
-  .description('Gerenciamento de Blocos de Efeito (WAH, NG, CMP, MOD, EFX, AMP, IR, EQ, SR, DLY, RVB, VOL, CAB)')
+  .description('Gerenciamento de blocos: ON/OFF, modelo e parâmetros (WAH, NG, CMP, MOD, EFX, AMP, IR, EQ, SR, DLY, RVB, VOL, CAB)')
   .argument('[id]', 'ID do bloco (ex: wah, MOD)')
   .argument('[status]', 'on | off | toggle')
   .action(async (id?: string, status?: string) => {
@@ -706,22 +632,41 @@ blockCmd
 
 blockCmd
   .command('show <id>')
-  .description('Exibe os detalhes e o modelo selecionado de um bloco')
+  .description('Exibe os detalhes, modelo e parâmetros de um bloco')
   .action(async (id: string) => {
     const block = normalizeBlockId(id);
     const client = await requireConnection();
     const models = NUX_MODEL_CATALOG[block] || [];
+    const params = NUX_BLOCK_PARAM_CATALOG[block] || [];
     let isEnabled = getPersistedBlockState(block);
+    let modelId = 0;
+    let modelName = models[0]?.name || 'N/A';
+    let patchParams: number[] | undefined;
     try {
       const patch = await client.requestPatchDump(2000);
-      isEnabled = patch.blocks[block]?.enabled ?? false;
+      const blk = patch.blocks[block];
+      if (blk) {
+        isEnabled = blk.enabled ?? false;
+        modelId = blk.modelId ?? 0;
+        modelName = blk.modelName || getModelName(block, modelId);
+        patchParams = blk.params;
+      }
     } catch {}
     printCard(`Bloco ${block}`, {
       'Nome do Bloco': block,
       'Estado (Patch)': isEnabled ? '🟢 Ligado' : '🔴 Desligado',
-      'Modelo Padrão': models[0]?.name || 'N/A',
-      'Total Modelos': models.length
+      'Modelo': `[${modelId}] ${modelName}`,
+      'Total Modelos': models.length,
+      'Parâmetros': params.length
     });
+    if (params.length > 0) {
+      console.log('  Knobs:');
+      for (const p of params) {
+        const val = patchParams?.[p.id] ?? getPersistedParamState(block, p.id);
+        console.log(`    ${p.name.padEnd(15)} = ${val}`);
+      }
+      console.log('');
+    }
     await finishCommand(client);
   });
 
@@ -771,25 +716,44 @@ blockCmd
   });
 
 blockCmd
-  .command('reset <id>')
-  .description('Reseta os parâmetros do bloco para o padrão do modelo')
-  .action(async (id: string) => {
+  .command('model <id> [selector...]')
+  .description('Lista ou seleciona o modelo de um bloco (ex: nux block model AMP 6)')
+  .action(async (id: string, selectorParts?: string[]) => {
     const block = normalizeBlockId(id);
+    const models = NUX_MODEL_CATALOG[block] || [];
+    const selector = selectorParts?.join(' ').trim();
+
+    if (!selector) {
+      console.log('\n========================================');
+      console.log(`  MODELOS DO BLOCO [${block}]`);
+      console.log('========================================');
+      if (models.length === 0) {
+        console.log('  (nenhum modelo no catálogo)');
+      } else {
+        for (const m of models) {
+          const desc = m.description ? ` — ${m.description}` : '';
+          console.log(`  [${String(m.id).padStart(2)}] ${m.name}${desc}`);
+        }
+      }
+      console.log('========================================\n');
+      return;
+    }
+
     const client = await requireConnection();
-    client.setModel(block, 0);
-    console.log(`↺ Bloco ${block} resetado.`);
+    try {
+      const model = findModel(block, selector);
+      client.setModel(block, model.id);
+      console.log(`🎸 Bloco ${block} → modelo [${model.id}] ${model.name}`);
+    } catch (err: any) {
+      console.error(`\n❌ ${err?.message || err}`);
+      await finishCommand(client, 1);
+    }
     await finishCommand(client);
   });
 
-// ==========================================
-// Parâmetros
-// ==========================================
-
-const paramCmd = program.command('param').description('Controle de Parâmetros de Efeito');
-
-paramCmd
-  .command('list [block]')
-  .description('Lista os parâmetros disponíveis por bloco ou de todos os blocos')
+blockCmd
+  .command('params [id]')
+  .description('Lista os parâmetros (knobs) disponíveis por bloco ou de todos os blocos')
   .action((blockInput?: string) => {
     console.log('\n========================================');
     if (blockInput) {
@@ -812,28 +776,9 @@ paramCmd
     console.log('========================================\n');
   });
 
-paramCmd
-  .command('show [blockOrParam] [paramName]')
-  .description('Exibe os detalhes de um parâmetro')
-  .action(async (arg1?: string, arg2?: string) => {
-    const client = await requireConnection();
-    const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
-    let val = getPersistedParamState(block, paramId);
-    try {
-      const patch = await client.requestPatchDump(2000);
-      const blkState = patch.blocks[block];
-      if (blkState && blkState.params && blkState.params[paramId] !== undefined) {
-        val = blkState.params[paramId];
-        setPersistedParamState(block, paramId, val);
-      }
-    } catch {}
-    console.log(`📊 Parâmetro [${block} > ${paramName}]: Faixa (0 a 100), Valor Atual: ${val}.`);
-    await finishCommand(client);
-  });
-
-paramCmd
+blockCmd
   .command('get [blockOrParam] [paramName]')
-  .description('Obtém o valor atual de um parâmetro')
+  .description('Obtém o valor atual de um parâmetro (ex: nux block get AMP Gain)')
   .action(async (arg1?: string, arg2?: string) => {
     const client = await requireConnection();
     if (!arg1 && !arg2) {
@@ -867,9 +812,9 @@ paramCmd
     await finishCommand(client);
   });
 
-paramCmd
+blockCmd
   .command('set [blockOrParam] [paramOrVal] [valOnly]')
-  .description('Define o valor de um parâmetro de um bloco (ex: nux param set AMP Gain 80)')
+  .description('Define o valor de um parâmetro (ex: nux block set AMP Gain 80)')
   .action(async (arg1?: string, arg2?: string, arg3?: string) => {
     const client = await requireConnection();
     let bInput: string | undefined;
@@ -898,7 +843,7 @@ paramCmd
 
     if (valInput === undefined) {
       console.error('\n❌ Erro: Valor do parâmetro não especificado.');
-      console.error('Uso: nux param set [bloco] <parâmetro> <valor>\nExemplo: nux param set AMP Gain 80\n');
+      console.error('Uso: nux block set [bloco] <parâmetro> <valor>\nExemplo: nux block set AMP Gain 80\n');
       await finishCommand(client, 1);
     }
 
@@ -915,7 +860,7 @@ paramCmd
     await finishCommand(client);
   });
 
-paramCmd
+blockCmd
   .command('min [blockOrParam] [paramName]')
   .description('Define o valor do parâmetro para o mínimo (0)')
   .action(async (arg1?: string, arg2?: string) => {
@@ -932,7 +877,7 @@ paramCmd
     await finishCommand(client);
   });
 
-paramCmd
+blockCmd
   .command('max [blockOrParam] [paramName]')
   .description('Define o valor do parâmetro para o máximo (100)')
   .action(async (arg1?: string, arg2?: string) => {
@@ -946,6 +891,17 @@ paramCmd
       console.error(`\n❌ ${err?.message || err}`);
       await finishCommand(client, 1);
     }
+    await finishCommand(client);
+  });
+
+blockCmd
+  .command('reset <id>')
+  .description('Reseta o bloco para o modelo padrão (modelo 0)')
+  .action(async (id: string) => {
+    const block = normalizeBlockId(id);
+    const client = await requireConnection();
+    client.setModel(block, 0);
+    console.log(`↺ Bloco ${block} resetado.`);
     await finishCommand(client);
   });
 

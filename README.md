@@ -35,6 +35,8 @@ nux sync              # Request full patch dump & sync state
 nux preset list                 # List all 128 presets (32 Banks A-D)
 nux preset show <id>            # Show preset details (e.g. 01A, 05C)
 nux preset load <id>            # Switch to hardware preset (e.g. 01A)
+nux preset up                   # Advance to next preset
+nux preset down                 # Go to previous preset
 nux preset save [id]            # Save current patch edits to slot
 nux preset rename <id> <nome>   # Rename preset
 nux preset clone <src> <dest>   # Clone preset from src to dest
@@ -50,6 +52,8 @@ nux preset import <arquivo>     # Import preset from file
 nux scene list                  # List scenes (Scene 1, 2, 3)
 nux scene show <1|2|3>          # Display scene settings
 nux scene select <1|2|3>        # Switch active scene
+nux scene up                    # Advance to next scene
+nux scene down                  # Go to previous scene
 nux scene clone <src> <dest>    # Copy scene settings from src to dest
 nux scene reset <1|2|3>         # Reset scene parameters
 ```
@@ -57,23 +61,19 @@ nux scene reset <1|2|3>         # Reset scene parameters
 ### ⚡ Blocos de Efeito
 ```bash
 nux block <id> [on|off]         # Show or set block ON/OFF (e.g. nux block wah on)
-nux block list                  # List all 10 effect blocks and models
-nux block show <id>             # Show block details and parameters
+nux block list                  # List all effect blocks and models
+nux block show <id>             # Show block details, model, and knobs
 nux block state <id> [on|off]   # Show or set ON/OFF status of block
 nux block enable <id>           # Turn effect block ON
 nux block disable <id>          # Turn effect block OFF
 nux block toggle <id>           # Toggle effect block status
-nux block reset <id>            # Reset block parameters to default
-```
-
-### 🎚️ Parâmetros
-```bash
-nux param list                  # List effect parameters
-nux param show <id>             # Show parameter info
-nux param get <id>              # Get parameter value (via scene dump)
-nux param set <id> <valor>      # Set parameter value via MIDI CC (0..100)
-nux param min <id>              # Set parameter value to minimum (0)
-nux param max <id>              # Set parameter value to maximum (100)
+nux block model <id> [name|num] # List or select block model (e.g. nux block model AMP 6)
+nux block params [id]           # List effect parameters (knobs)
+nux block get [id] [param]      # Get parameter value (via scene dump)
+nux block set [id] <param> <v>  # Set parameter value via MIDI CC (0..100)
+nux block min [id] <param>      # Set parameter value to minimum (0)
+nux block max [id] <param>      # Set parameter value to maximum (100)
+nux block reset <id>            # Reset block to default model (0)
 ```
 
 See [docs/Parameters.md](docs/Parameters.md) and [docs/ControlChanges.md](docs/ControlChanges.md).

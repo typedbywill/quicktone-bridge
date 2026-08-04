@@ -1,6 +1,6 @@
 # Parameters (get / set)
 
-How `nux param` reads and writes effect knobs on the NUX MG-30.
+How `nux block set` / `nux block get` read and write effect knobs on the NUX MG-30.
 
 ## Set → MIDI Control Change
 
@@ -38,7 +38,7 @@ B0 18 50
 
 **Value range:** 0–100 (as in ControlChanges.md). The CLI clamps to this range.
 
-CCs 0–11 select the **model** for each block (not knobs).
+CCs 0–11 select the **model** for each block (not knobs). The bridge CLI uses SysEx `MODEL_SELECT` via `nux block model` / `client.setModel`.
 
 ### Legacy note
 
@@ -52,20 +52,23 @@ MIDI CC cannot query a value. To **read** knobs:
 2. Unpack the 7-bit payload (2×8-bit → 3×7-bit encoding).
 3. Read models (offsets 0–11) and knob slots (offsets 12+) per §0B layout.
 
-CLI flow: `nux param get AMP Gain` → `requestPatchDump()` → `PatchDecoder` → `blocks.AMP.params[0]`.
+CLI flow: `nux block get AMP Gain` → `requestPatchDump()` → `PatchDecoder` → `blocks.AMP.params[0]`.
 
 Local JSON cache is only a fallback when the dump fails.
 
 ## CLI
 
 ```bash
-nux param list              # catalog per block
-nux param list AMP
-nux param show AMP Gain
-nux param get AMP Gain
-nux param set AMP Gain 80   # sends B0 18 50
-nux param min AMP Gain      # 0
-nux param max AMP Gain      # 100
+nux block params              # catalog per block
+nux block params AMP
+nux block show AMP            # state, model, knobs
+nux block get AMP Gain
+nux block set AMP Gain 80     # sends B0 18 50
+nux block min AMP Gain        # 0
+nux block max AMP Gain        # 100
+nux block model AMP           # list amp models
+nux block model AMP 6         # select by id
+nux block model AMP "Plexi 100"
 ```
 
 Knob **names** follow the scene-dump order in protocol.md (e.g. AMP: Gain, Master, Bass, Middle, Treble, Bias, Level). Exact labels still depend on the loaded model; indices always match ControlChanges knob numbers.

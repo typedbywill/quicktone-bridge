@@ -406,6 +406,40 @@ export function getModelName(block: BlockType, modelId: number): string {
   return found ? found.name : `Model #${modelId}`;
 }
 
+export function findModel(
+  block: BlockType,
+  selector: string | number
+): { id: number; name: string; description?: string } {
+  const list = NUX_MODEL_CATALOG[block] || [];
+  if (list.length === 0) {
+    throw new Error(`Bloco ${block} não possui modelos no catálogo.`);
+  }
+
+  if (typeof selector === 'number' || (typeof selector === 'string' && selector.trim() !== '' && !isNaN(Number(selector)))) {
+    const id = Number(selector);
+    const found = list.find(m => m.id === id);
+    if (found) return found;
+    throw new Error(
+      `Modelo #${id} não encontrado no bloco ${block}. Use: nux block model ${block}`
+    );
+  }
+
+  const search = selector.toString().toLowerCase().trim();
+  const exact = list.find(m => m.name.toLowerCase() === search);
+  if (exact) return exact;
+
+  const partial = list.filter(m => m.name.toLowerCase().includes(search));
+  if (partial.length === 1) return partial[0];
+  if (partial.length > 1) {
+    const names = partial.map(m => `[${m.id}] ${m.name}`).join(', ');
+    throw new Error(`Modelo ambíguo "${selector}" em ${block}. Candidatos: ${names}`);
+  }
+
+  throw new Error(
+    `Modelo "${selector}" não encontrado no bloco ${block}. Use: nux block model ${block}`
+  );
+}
+
 export function blockTypeToId(block: BlockType | number | string): number {
   if (typeof block === 'number') {
     if (block < 0 || block >= BLOCK_LIST.length) {

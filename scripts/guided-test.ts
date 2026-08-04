@@ -43,8 +43,6 @@ const TEST_CASES: TestCase[] = [
   { id: 13, category: 'Presets (Navegação)', name: 'Carregar Preset 01A', description: 'Retorna e carrega o Preset 01A no hardware', args: ['preset', 'load', '01A'] },
   { id: 14, category: 'Presets (Navegação)', name: 'Preset Up', description: 'Avança para o próximo preset no pedal', args: ['preset', 'up'] },
   { id: 15, category: 'Presets (Navegação)', name: 'Preset Down', description: 'Recua para o preset anterior no pedal', args: ['preset', 'down'] },
-  { id: 16, category: 'Presets (Navegação)', name: 'Preset-Up (Atalho Global)', description: 'Executa atalho global nux preset-up', args: ['preset-up'] },
-  { id: 17, category: 'Presets (Navegação)', name: 'Preset-Down (Atalho Global)', description: 'Executa atalho global nux preset-down', args: ['preset-down'] },
 
   // 3. Modificação & Gerenciamento de Presets
   { id: 18, category: 'Presets (Gerenciamento)', name: 'Salvar Patch Ativo', description: 'Salva as alterações do patch atual', args: ['preset', 'save'] },
@@ -71,28 +69,29 @@ const TEST_CASES: TestCase[] = [
   { id: 35, category: 'Blocos de Efeito', name: 'Desativar Bloco MOD', description: 'Desliga o bloco MOD no pedal', args: ['block', 'MOD', 'off'] },
   { id: 36, category: 'Blocos de Efeito', name: 'Toggle Bloco MOD', description: 'Alterna o estado do bloco MOD', args: ['block', 'MOD', 'toggle'] },
   { id: 37, category: 'Blocos de Efeito', name: 'Resetar Bloco MOD', description: 'Reseta os parâmetros do bloco MOD para os padrões', args: ['block', 'reset', 'MOD'] },
+  { id: 38, category: 'Blocos de Efeito', name: 'Listar Modelos AMP', description: 'Lista os modelos de amp disponíveis', args: ['block', 'model', 'AMP'] },
+  { id: 39, category: 'Blocos de Efeito', name: 'Selecionar Modelo AMP', description: 'Seleciona o modelo AMP #6 (Class A15)', args: ['block', 'model', 'AMP', '6'] },
 
-  // 6. Controle de Parâmetros
-  { id: 38, category: 'Parâmetros', name: 'Listar Parâmetros', description: 'Lista os parâmetros de efeito disponíveis', args: ['param', 'list'] },
-  { id: 39, category: 'Parâmetros', name: 'Exibir Parâmetro Gain', description: 'Exibe detalhes do parâmetro Gain', args: ['param', 'show', 'Gain'] },
-  { id: 40, category: 'Parâmetros', name: 'Obter Parâmetro Gain', description: 'Obtém o valor atual do Gain', args: ['param', 'get', 'Gain'] },
-  { id: 41, category: 'Parâmetros', name: 'Definir Parâmetro Gain (80)', description: 'Define o valor do Gain para 80', args: ['param', 'set', 'Gain', '80'] },
-  { id: 42, category: 'Parâmetros', name: 'Definir Gain Mínimo (0)', description: 'Define o Gain para o valor mínimo (0)', args: ['param', 'min', 'Gain'] },
-  { id: 43, category: 'Parâmetros', name: 'Definir Gain Máximo (127)', description: 'Define o Gain para o valor máximo (127)', args: ['param', 'max', 'Gain'] },
+  // 6. Controle de Parâmetros (via block)
+  { id: 40, category: 'Parâmetros', name: 'Listar Parâmetros', description: 'Lista os parâmetros de efeito disponíveis', args: ['block', 'params'] },
+  { id: 41, category: 'Parâmetros', name: 'Obter Parâmetro Gain', description: 'Obtém o valor atual do Gain', args: ['block', 'get', 'AMP', 'Gain'] },
+  { id: 42, category: 'Parâmetros', name: 'Definir Parâmetro Gain (80)', description: 'Define o valor do Gain para 80', args: ['block', 'set', 'AMP', 'Gain', '80'] },
+  { id: 43, category: 'Parâmetros', name: 'Definir Gain Mínimo (0)', description: 'Define o Gain para o valor mínimo (0)', args: ['block', 'min', 'AMP', 'Gain'] },
+  { id: 44, category: 'Parâmetros', name: 'Definir Gain Máximo (100)', description: 'Define o Gain para o valor máximo (100)', args: ['block', 'max', 'AMP', 'Gain'] },
 
   // 7. Cadeia de Efeitos (Chain)
-  { id: 44, category: 'Cadeia de Efeitos', name: 'Exibir Cadeia de Sinal', description: 'Exibe a ordem atual dos blocos na cadeia', args: ['chain', 'show'] },
-  { id: 45, category: 'Cadeia de Efeitos', name: 'Mover Bloco', description: 'Move o bloco MOD para antes do EFX', args: ['chain', 'move', 'MOD', 'EFX'] },
-  { id: 46, category: 'Cadeia de Efeitos', name: 'Trocar Posicionamento de Blocos', description: 'Troca a posição dos blocos MOD e RVB', args: ['chain', 'swap', 'MOD', 'RVB'] },
-  { id: 47, category: 'Cadeia de Efeitos', name: 'Resetar Cadeia de Sinal', description: 'Reseta a cadeia para a ordem padrão', args: ['chain', 'reset'] },
+  { id: 45, category: 'Cadeia de Efeitos', name: 'Exibir Cadeia de Sinal', description: 'Exibe a ordem atual dos blocos na cadeia', args: ['chain', 'show'] },
+  { id: 46, category: 'Cadeia de Efeitos', name: 'Mover Bloco', description: 'Move o bloco MOD para antes do EFX', args: ['chain', 'move', 'MOD', 'EFX'] },
+  { id: 47, category: 'Cadeia de Efeitos', name: 'Trocar Posicionamento de Blocos', description: 'Troca a posição dos blocos MOD e RVB', args: ['chain', 'swap', 'MOD', 'RVB'] },
+  { id: 48, category: 'Cadeia de Efeitos', name: 'Resetar Cadeia de Sinal', description: 'Reseta a cadeia para a ordem padrão', args: ['chain', 'reset'] },
 
   // 8. Hardware & Export/Import Subcomandos
-  { id: 48, category: 'Hardware & Export/Import', name: 'Info do Hardware', description: 'Exibe detalhes do hardware NUX MG-30', args: ['device', 'info'] },
-  { id: 49, category: 'Hardware & Export/Import', name: 'Versão do Firmware', description: 'Exibe a versão de firmware registrada', args: ['device', 'firmware'] },
-  { id: 50, category: 'Hardware & Export/Import', name: 'Exportar Preset (Comando Top-Level)', description: 'Comando global export preset 01A', args: ['export', 'preset', '01A', 'test-export-top.json'] },
-  { id: 51, category: 'Hardware & Export/Import', name: 'Exportar Banco Completo', description: 'Comando global export bank', args: ['export', 'bank', 'test-bank-top.json'] },
-  { id: 52, category: 'Hardware & Export/Import', name: 'Importar Preset (Comando Top-Level)', description: 'Comando global import preset', args: ['import', 'preset', 'test-export-top.json'] },
-  { id: 53, category: 'Hardware & Export/Import', name: 'Importar Banco Completo', description: 'Comando global import bank', args: ['import', 'bank', 'test-bank-top.json'] }
+  { id: 49, category: 'Hardware & Export/Import', name: 'Info do Hardware', description: 'Exibe detalhes do hardware NUX MG-30', args: ['device', 'info'] },
+  { id: 50, category: 'Hardware & Export/Import', name: 'Versão do Firmware', description: 'Exibe a versão de firmware registrada', args: ['device', 'firmware'] },
+  { id: 51, category: 'Hardware & Export/Import', name: 'Exportar Preset (Comando Top-Level)', description: 'Comando global export preset 01A', args: ['export', 'preset', '01A', 'test-export-top.json'] },
+  { id: 52, category: 'Hardware & Export/Import', name: 'Exportar Banco Completo', description: 'Comando global export bank', args: ['export', 'bank', 'test-bank-top.json'] },
+  { id: 53, category: 'Hardware & Export/Import', name: 'Importar Preset (Comando Top-Level)', description: 'Comando global import preset', args: ['import', 'preset', 'test-export-top.json'] },
+  { id: 54, category: 'Hardware & Export/Import', name: 'Importar Banco Completo', description: 'Comando global import bank', args: ['import', 'bank', 'test-bank-top.json'] }
 ];
 
 const rl = readline.createInterface({
