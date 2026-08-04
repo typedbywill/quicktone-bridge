@@ -22,6 +22,65 @@ export const CC_MAPPINGS = {
 } as const;
 
 /**
+ * Knob parameter MIDI CC base (QuickTone Settings → Custom MIDI / docs/ControlChanges.md).
+ * CC number = baseCc + paramId (0-based knob index within the block).
+ * Knob value range on the device map is 0..100.
+ */
+export const PARAM_CC_MAX = 100;
+
+export const PARAM_CC_MAP: Record<BlockType, { baseCc: number; maxKnobs: number } | null> = {
+  WAH: { baseCc: 12, maxKnobs: 2 },
+  CMP: { baseCc: 14, maxKnobs: 4 },
+  EFX: { baseCc: 18, maxKnobs: 6 },
+  AMP: { baseCc: 24, maxKnobs: 8 },
+  EQ: { baseCc: 32, maxKnobs: 12 },
+  NG: { baseCc: 44, maxKnobs: 4 },
+  MOD: { baseCc: 48, maxKnobs: 6 },
+  DLY: { baseCc: 54, maxKnobs: 8 },
+  RVB: { baseCc: 62, maxKnobs: 4 },
+  IR: { baseCc: 66, maxKnobs: 6 },
+  SR: { baseCc: 72, maxKnobs: 3 }, // Send, Return, SR Routing
+  VOL: { baseCc: 75, maxKnobs: 3 }, // Patch Min, Patch Max, Patch Volume
+  CAB: null, // No dedicated CCs — IR slot covers cab/IR in the MIDI map
+};
+
+/**
+ * Resolve MIDI CC number for a block knob, or null if the block has no CC knobs.
+ */
+export function paramToCc(block: BlockType, paramId: number): number | null {
+  const entry = PARAM_CC_MAP[block];
+  if (!entry) return null;
+  if (paramId < 0 || paramId >= entry.maxKnobs) return null;
+  return entry.baseCc + paramId;
+}
+
+/**
+ * Scene dump block order (protocol.md §0B) — excludes CAB (IR covers cab/IR).
+ */
+export const SCENE_DUMP_BLOCK_ORDER: BlockType[] = [
+  'WAH', 'CMP', 'EFX', 'AMP', 'EQ', 'NG', 'MOD', 'DLY', 'RVB', 'IR', 'SR', 'VOL',
+];
+
+/**
+ * Fixed knob slot sizes in the decoded scene dump (count byte + N value slots).
+ * Matches protocol.md §0B layout offsets 12–88.
+ */
+export const SCENE_DUMP_KNOB_SLOTS: Record<string, number> = {
+  WAH: 2,
+  CMP: 4,
+  EFX: 6,
+  AMP: 8,
+  EQ: 12,
+  NG: 4,
+  MOD: 6,
+  DLY: 8,
+  RVB: 4,
+  IR: 6,
+  SR: 3,
+  VOL: 2,
+};
+
+/**
  * Block types in signal routing order & index mapping
  */
 export const BLOCK_LIST: BlockType[] = [
@@ -180,80 +239,108 @@ export const NUX_MODEL_CATALOG: Record<BlockType, { id: number; name: string; de
   ]
 };
 
+/**
+ * Knob names aligned with scene-dump order (protocol.md §0B) and ControlChanges.md knob indices.
+ * Slot count matches SCENE_DUMP_KNOB_SLOTS / PARAM_CC_MAP.maxKnobs where applicable.
+ */
 export const NUX_BLOCK_PARAM_CATALOG: Record<BlockType, { id: number; name: string }[]> = {
   WAH: [
-    { id: 0, name: 'Position' },
-    { id: 1, name: 'Level' }
+    { id: 0, name: 'Knob 1' },
+    { id: 1, name: 'Knob 2' },
   ],
   CMP: [
     { id: 0, name: 'Sustain' },
     { id: 1, name: 'Level' },
     { id: 2, name: 'Attack' },
-    { id: 3, name: 'Clipping' }
+    { id: 3, name: 'Clipping' },
   ],
   EFX: [
-    { id: 0, name: 'Gain' },
+    { id: 0, name: 'Drive' },
     { id: 1, name: 'Tone' },
-    { id: 2, name: 'Level' }
+    { id: 2, name: 'Level' },
+    { id: 3, name: 'Knob 4' },
+    { id: 4, name: 'Knob 5' },
+    { id: 5, name: 'Knob 6' },
   ],
   AMP: [
     { id: 0, name: 'Gain' },
-    { id: 1, name: 'Bass' },
-    { id: 2, name: 'Middle' },
-    { id: 3, name: 'Treble' },
-    { id: 4, name: 'Presence' },
-    { id: 5, name: 'Master' }
+    { id: 1, name: 'Master' },
+    { id: 2, name: 'Bass' },
+    { id: 3, name: 'Middle' },
+    { id: 4, name: 'Treble' },
+    { id: 5, name: 'Bias' },
+    { id: 6, name: 'Level' },
+    { id: 7, name: 'Knob 8' },
   ],
   EQ: [
-    { id: 0, name: '100Hz' },
-    { id: 1, name: '250Hz' },
-    { id: 2, name: '630Hz' },
-    { id: 3, name: '1.6kHz' },
-    { id: 4, name: '4kHz' },
-    { id: 5, name: '9kHz' }
+    { id: 0, name: 'Band 1' },
+    { id: 1, name: 'Band 2' },
+    { id: 2, name: 'Band 3' },
+    { id: 3, name: 'Band 4' },
+    { id: 4, name: 'Band 5' },
+    { id: 5, name: 'Band 6' },
+    { id: 6, name: 'Band 7' },
+    { id: 7, name: 'Band 8' },
+    { id: 8, name: 'Band 9' },
+    { id: 9, name: 'Band 10' },
+    { id: 10, name: 'Band 11' },
+    { id: 11, name: 'Band 12' },
   ],
   NG: [
-    { id: 0, name: 'Threshold' },
-    { id: 1, name: 'Decay' }
+    { id: 0, name: 'Sens' },
+    { id: 1, name: 'Decay' },
+    { id: 2, name: 'Knob 3' },
+    { id: 3, name: 'Knob 4' },
   ],
   MOD: [
     { id: 0, name: 'Rate' },
     { id: 1, name: 'Depth' },
     { id: 2, name: 'Mix' },
-    { id: 3, name: 'Tone' }
+    { id: 3, name: 'Tone' },
+    { id: 4, name: 'Knob 5' },
+    { id: 5, name: 'Knob 6' },
   ],
   DLY: [
-    { id: 0, name: 'Time' },
-    { id: 1, name: 'Repeat' },
-    { id: 2, name: 'Mix' },
-    { id: 3, name: 'Tone' }
+    { id: 0, name: 'Level' },
+    { id: 1, name: 'Time' },
+    { id: 2, name: 'Knob 3' },
+    { id: 3, name: 'Repeat' },
+    { id: 4, name: 'Time 2' },
+    { id: 5, name: 'Knob 6' },
+    { id: 6, name: 'Repeat 2' },
+    { id: 7, name: 'Parameter' },
   ],
   RVB: [
-    { id: 0, name: 'Decay' },
-    { id: 1, name: 'Damp' },
-    { id: 2, name: 'Mix' },
-    { id: 3, name: 'Pre-Delay' }
+    { id: 0, name: 'Mix' },
+    { id: 1, name: 'Decay' },
+    { id: 2, name: 'Shim' },
+    { id: 3, name: 'Knob 4' },
   ],
   CAB: [
     { id: 0, name: 'Level' },
     { id: 1, name: 'Low Cut' },
     { id: 2, name: 'High Cut' },
     { id: 3, name: 'Mic Type' },
-    { id: 4, name: 'Distance' }
+    { id: 4, name: 'Distance' },
   ],
   IR: [
-    { id: 0, name: 'Level' },
-    { id: 1, name: 'Low Cut' },
-    { id: 2, name: 'High Cut' }
+    { id: 0, name: 'Knob 1' },
+    { id: 1, name: 'Knob 2' },
+    { id: 2, name: 'Level' },
+    { id: 3, name: 'Low Cut' },
+    { id: 4, name: 'High Cut' },
+    { id: 5, name: 'Knob 6' },
   ],
   SR: [
-    { id: 0, name: 'Send Level' },
-    { id: 1, name: 'Return Level' }
+    { id: 0, name: 'Send' },
+    { id: 1, name: 'Return' },
+    { id: 2, name: 'Routing' },
   ],
   VOL: [
-    { id: 0, name: 'Volume' },
-    { id: 1, name: 'Min Volume' }
-  ]
+    { id: 0, name: 'Min' },
+    { id: 1, name: 'Max' },
+    { id: 2, name: 'Volume' },
+  ],
 };
 
 export function findBlockParam(blockInput?: string, paramInput?: string | number): { block: BlockType; paramId: number; paramName: string } {

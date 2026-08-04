@@ -7,7 +7,22 @@ import { programChangeToPresetName, presetNameToProgramChange } from '../src/con
 describe('Protocol & Conversion Tests', () => {
   it('should encode SysEx patch dump request correctly', () => {
     const bytes = SysExEncoder.buildPatchDumpRequest();
-    expect(Array.from(bytes)).toEqual([0xF0, 0x43, 0x58, 0x70, 0x0A, 0x00, 0xF7]);
+    expect(Array.from(bytes)).toEqual([
+      0xF0, 0x43, 0x58, 0x70, 0x0C, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF7,
+    ]);
+  });
+
+  it('should encode AMP Gain parameter as MIDI CC 24', () => {
+    const bytes = SysExEncoder.buildParameterChange('AMP', 0, 80);
+    expect(Array.from(bytes)).toEqual([0xB0, 24, 80]);
+
+    const master = SysExEncoder.buildParameterChange('AMP', 1, 65);
+    expect(Array.from(master)).toEqual([0xB0, 25, 65]);
+  });
+
+  it('should clamp parameter CC values to 0..100', () => {
+    expect(Array.from(SysExEncoder.buildParameterChange('AMP', 0, 150))).toEqual([0xB0, 24, 100]);
+    expect(Array.from(SysExEncoder.buildParameterChange('AMP', 0, -5))).toEqual([0xB0, 24, 0]);
   });
 
   it('should encode block toggle to MIDI CC correctly', () => {

@@ -798,7 +798,7 @@ paramCmd
       console.log(`  PARÂMETROS DO BLOCO DE EFEITO [${block}]`);
       console.log('========================================');
       for (const p of params) {
-        console.log(`  [${p.id}] ${p.name.padEnd(15)} : Faixa (0 a 127)`);
+        console.log(`  [${p.id}] ${p.name.padEnd(15)} : Faixa (0 a 100) [MIDI CC]`);
       }
     } else {
       console.log('  PARÂMETROS DE EFEITOS (TODOS OS BLOCOS)');
@@ -824,9 +824,10 @@ paramCmd
       const blkState = patch.blocks[block];
       if (blkState && blkState.params && blkState.params[paramId] !== undefined) {
         val = blkState.params[paramId];
+        setPersistedParamState(block, paramId, val);
       }
     } catch {}
-    console.log(`📊 Parâmetro [${block} > ${paramName}]: Faixa (0 a 127), Valor Atual: ${val}.`);
+    console.log(`📊 Parâmetro [${block} > ${paramName}]: Faixa (0 a 100), Valor Atual: ${val}.`);
     await finishCommand(client);
   });
 
@@ -859,6 +860,7 @@ paramCmd
       const blkState = patch.blocks[block];
       if (blkState && blkState.params && blkState.params[paramId] !== undefined) {
         val = blkState.params[paramId];
+        setPersistedParamState(block, paramId, val);
       }
     } catch {}
     console.log(`🔎 Parâmetro ${block} > ${paramName} (ID ${paramId}) = ${val}`);
@@ -900,11 +902,16 @@ paramCmd
       await finishCommand(client, 1);
     }
 
-    const val = Math.min(127, Math.max(0, Number(valInput)));
+    const val = Math.min(100, Math.max(0, Number(valInput)));
     const { block, paramId, paramName } = findBlockParam(bInput, pInput);
-    client.setParameter(block, paramId, val);
-    setPersistedParamState(block, paramId, val);
-    console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para ${val}.`);
+    try {
+      client.setParameter(block, paramId, val);
+      setPersistedParamState(block, paramId, val);
+      console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para ${val} (MIDI CC).`);
+    } catch (err: any) {
+      console.error(`\n❌ ${err?.message || err}`);
+      await finishCommand(client, 1);
+    }
     await finishCommand(client);
   });
 
@@ -914,21 +921,31 @@ paramCmd
   .action(async (arg1?: string, arg2?: string) => {
     const client = await requireConnection();
     const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
-    client.setParameter(block, paramId, 0);
-    setPersistedParamState(block, paramId, 0);
-    console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÍNIMO (0).`);
+    try {
+      client.setParameter(block, paramId, 0);
+      setPersistedParamState(block, paramId, 0);
+      console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÍNIMO (0).`);
+    } catch (err: any) {
+      console.error(`\n❌ ${err?.message || err}`);
+      await finishCommand(client, 1);
+    }
     await finishCommand(client);
   });
 
 paramCmd
   .command('max [blockOrParam] [paramName]')
-  .description('Define o valor do parâmetro para o máximo (127)')
+  .description('Define o valor do parâmetro para o máximo (100)')
   .action(async (arg1?: string, arg2?: string) => {
     const client = await requireConnection();
     const { block, paramId, paramName } = findBlockParam(arg2 ? arg1 : undefined, arg2 ? arg2 : arg1);
-    client.setParameter(block, paramId, 127);
-    setPersistedParamState(block, paramId, 127);
-    console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÁXIMO (127).`);
+    try {
+      client.setParameter(block, paramId, 100);
+      setPersistedParamState(block, paramId, 100);
+      console.log(`⚙️ Parâmetro ${block} > ${paramName} (ID ${paramId}) definido para o MÁXIMO (100).`);
+    } catch (err: any) {
+      console.error(`\n❌ ${err?.message || err}`);
+      await finishCommand(client, 1);
+    }
     await finishCommand(client);
   });
 

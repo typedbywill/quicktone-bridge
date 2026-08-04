@@ -8,19 +8,26 @@ export interface MidiPortInfo {
 }
 
 export enum SysExCommand {
+  /** @deprecated Legacy bridge id — prefer SCENE_CURRENT_DATA (0x0C) for dumps */
   HANDSHAKE_PATCH_DUMP = 0x0A,
+  /** @deprecated Params use MIDI CC (ControlChanges.md), not SysEx 0x01 */
   REALTIME_PARAM_CHANGE = 0x01,
   BLOCK_TOGGLE = 0x02,
   MODEL_SELECT = 0x03,
   SYSTEM_VOL_GLOBAL = 0x03,
   HARDWARE_INFO_1 = 0x04,
   HARDWARE_INFO_2 = 0x05,
+  /** protocol.md: Get/Set scene saved data — also used historically as SAVE_PATCH in this bridge */
   SAVE_PATCH = 0x0B,
+  SCENE_SAVED_DATA = 0x0B,
+  /** protocol.md: Get scene current data (on edit) */
+  SCENE_CURRENT_DATA = 0x0C,
+  /** @deprecated Alias — 0x0C is scene current dump, not realtime scene select (use CC 80) */
   SCENE_SELECT = 0x0C,
   HEARTBEAT_PING = 0x0E,
   SIGNAL_CHAIN_ROUTING = 0x0F,
   GLOBAL_EQ_SETUP = 0x14,
-  EXP_TUNER_STATUS = 0x15
+  EXP_TUNER_STATUS = 0x15,
 }
 
 export enum SysExDirection {

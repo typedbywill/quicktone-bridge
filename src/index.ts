@@ -10,6 +10,7 @@ export * from './transport/NodeTransport.js';
 export * from './transport/WebMidiTransport.js';
 export * from './protocol/SysExEncoder.js';
 export * from './protocol/SysExDecoder.js';
+export * from './protocol/nuxEncoding.js';
 export * from './patch/PatchDecoder.js';
 export * from './patch/PatchEncoder.js';
 export * from './client/NuxMG30Client.js';

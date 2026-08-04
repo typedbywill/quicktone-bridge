@@ -89,7 +89,7 @@ describe('NUX Block Parameter Resolution Tests', () => {
 
     const dlyTime = findBlockParam('DLY', 'Time');
     expect(dlyTime.block).toBe('DLY');
-    expect(dlyTime.paramId).toBe(0);
+    expect(dlyTime.paramId).toBe(1);
     expect(dlyTime.paramName).toBe('Time');
 
     const modRate = findBlockParam('MOD', 'Rate');
@@ -106,11 +106,22 @@ describe('NUX Block Parameter Resolution Tests', () => {
   it('should correctly resolve param by single param name or numeric index', () => {
     const timeParam = findBlockParam('Time');
     expect(timeParam.block).toBe('DLY');
-    expect(timeParam.paramId).toBe(0);
+    expect(timeParam.paramId).toBe(1);
 
     const numericParam = findBlockParam('AMP', '3');
     expect(numericParam.block).toBe('AMP');
     expect(numericParam.paramId).toBe(3);
-    expect(numericParam.paramName).toBe('Treble');
+    expect(numericParam.paramName).toBe('Middle');
+  });
+});
+
+describe('NuxMG30Client Parameter CC Tests', () => {
+  it('should send AMP Gain as MIDI CC 24', () => {
+    const transport = new DummyTransport();
+    const client = new NuxMG30Client({ transport });
+
+    client.setParameter('AMP', 0, 80);
+    expect(transport.sentMessages.length).toBe(1);
+    expect(Array.from(transport.sentMessages[0])).toEqual([0xB0, 24, 80]);
   });
 });

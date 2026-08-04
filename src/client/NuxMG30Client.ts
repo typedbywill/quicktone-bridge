@@ -171,7 +171,8 @@ export class NuxMG30Client {
   }
 
   /**
-   * Sets a parameter value for a block (0..127).
+   * Sets a parameter value for a block via MIDI CC (0..100).
+   * See docs/ControlChanges.md — e.g. AMP Gain → CC 24.
    */
   public setParameter(block: BlockType | number, paramId: number, value: number): void {
     const blockId = blockTypeToId(block);
@@ -179,7 +180,7 @@ export class NuxMG30Client {
     const msg = SysExEncoder.buildParameterChange(blockId, paramId, value);
     this.transport.send(msg);
 
-    this.emit('paramChanged', { block: blockName, paramId, value });
+    this.emit('paramChanged', { block: blockName, paramId, value: msg[2] });
   }
 
   /**
@@ -317,7 +318,11 @@ export class NuxMG30Client {
     if (packet) {
       this.emit('sysex', packet);
 
-      if (packet.command === SysExCommand.HANDSHAKE_PATCH_DUMP) {
+      if (
+        packet.command === SysExCommand.SCENE_CURRENT_DATA ||
+        packet.command === SysExCommand.SCENE_SAVED_DATA ||
+        packet.command === SysExCommand.HANDSHAKE_PATCH_DUMP
+      ) {
         const patch = PatchDecoder.decode(packet.payload);
         const presetInfo = programChangeToPresetName(this.activePresetIndex);
         patch.presetName = presetInfo.name;

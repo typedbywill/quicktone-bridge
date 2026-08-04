@@ -70,11 +70,13 @@ nux block reset <id>            # Reset block parameters to default
 ```bash
 nux param list                  # List effect parameters
 nux param show <id>             # Show parameter info
-nux param get <id>              # Get parameter value
-nux param set <id> <valor>      # Set parameter value (0..127)
+nux param get <id>              # Get parameter value (via scene dump)
+nux param set <id> <valor>      # Set parameter value via MIDI CC (0..100)
 nux param min <id>              # Set parameter value to minimum (0)
-nux param max <id>              # Set parameter value to maximum (127)
+nux param max <id>              # Set parameter value to maximum (100)
 ```
+
+See [docs/Parameters.md](docs/Parameters.md) and [docs/ControlChanges.md](docs/ControlChanges.md).
 
 ### 🔗 Cadeia de Efeitos
 ```bash

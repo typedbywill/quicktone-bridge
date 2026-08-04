@@ -1,4 +1,13 @@
-import { NUX_SYSEX_HEADER, SYSEX_END, blockTypeToId, presetNameToProgramChange, CC_MAPPINGS } from '../constants.js';
+import {
+  NUX_SYSEX_HEADER,
+  SYSEX_END,
+  blockTypeToId,
+  idToBlockType,
+  presetNameToProgramChange,
+  CC_MAPPINGS,
+  paramToCc,
+  PARAM_CC_MAX,
+} from '../constants.js';
 import { SysExCommand, SysExDirection, BlockType } from '../types.js';
 
 export class SysExEncoder {
@@ -14,24 +23,38 @@ export class SysExEncoder {
     const payloadArr = Array.from(payload);
     const bytes = [
       ...NUX_SYSEX_HEADER,
-      command & 0x7F,
-      direction & 0x7F,
+      command & 0x7f,
+      direction & 0x7f,
       ...payloadArr,
-      SYSEX_END
+      SYSEX_END,
     ];
     return new Uint8Array(bytes);
   }
 
   /**
-   * Request full active patch dump (0x0A)
+   * Request current scene edit buffer (protocol.md command `0C`).
+   * Query: F0 43 58 70 0C 00 00 01 00 00 00 00 00 00 F7
    */
   public static buildPatchDumpRequest(): Uint8Array {
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.HANDSHAKE_PATCH_DUMP, 0x00, SYSEX_END]);
+    return new Uint8Array([
+      ...NUX_SYSEX_HEADER,
+      SysExCommand.SCENE_CURRENT_DATA,
+      0x00,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      SYSEX_END,
+    ]);
   }
 
   /**
-   * Toggle an effect block ON or OFF using MIDI CC
-   * NUX MG-30 uses 0x00 for ON (Enabled) and 0x41 for OFF (Disabled)
+   * Toggle an effect block ON or OFF using MIDI CC.
+   * NUX MG-30 uses 0x00 for ON (Enabled) and 0x41 for OFF (Disabled).
    */
   public static buildBlockToggle(block: BlockType | number, enabled: boolean): Uint8Array {
     const blockId = blockTypeToId(block);
@@ -43,35 +66,55 @@ export class SysExEncoder {
    * Select an effect model for a block (0x03)
    */
   public static buildModelSelect(block: BlockType | number, modelId: number): Uint8Array {
-    const blockId = blockTypeToId(block);
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.MODEL_SELECT, SysExDirection.HOST_TO_DEVICE, blockId & 0x7F, modelId & 0x7F, SYSEX_END]);
+    const blockId = typeof block === 'number' ? block : blockTypeToId(block);
+    return new Uint8Array([
+      ...NUX_SYSEX_HEADER,
+      SysExCommand.MODEL_SELECT,
+      SysExDirection.HOST_TO_DEVICE,
+      blockId & 0x7f,
+      modelId & 0x7f,
+      SYSEX_END,
+    ]);
   }
 
   /**
-   * Set a parameter value for a block (0x01)
+   * Set a block knob via MIDI CC (docs/ControlChanges.md).
+   * Example: AMP Gain (knob 0) → CC 24 → `B0 18 <value>`
+   * Value is clamped to 0..100 (device MIDI map range).
    */
   public static buildParameterChange(block: BlockType | number, paramId: number, value: number): Uint8Array {
-    const blockId = typeof block === 'number' ? block : blockTypeToId(block);
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.REALTIME_PARAM_CHANGE, SysExDirection.HOST_TO_DEVICE, blockId & 0x7F, paramId & 0x7F, value & 0x7F, SYSEX_END]);
+    const bt: BlockType = typeof block === 'number' ? idToBlockType(block) : block;
+    const cc = paramToCc(bt, paramId);
+    if (cc === null) {
+      throw new Error(`Block ${bt} has no MIDI CC mapping for param ${paramId}`);
+    }
+    const clamped = Math.min(PARAM_CC_MAX, Math.max(0, value | 0));
+    return this.buildControlChange(cc, clamped);
   }
 
   /**
    * Save current patch edits to hardware preset slot (0x0B)
    */
   public static buildSavePatch(preset: number | string): Uint8Array {
-    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : (preset & 0x7F);
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.SAVE_PATCH, SysExDirection.HOST_TO_DEVICE, pc, SYSEX_END]);
+    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : preset & 0x7f;
+    return new Uint8Array([
+      ...NUX_SYSEX_HEADER,
+      SysExCommand.SAVE_PATCH,
+      SysExDirection.HOST_TO_DEVICE,
+      pc,
+      SYSEX_END,
+    ]);
   }
 
   /**
-   * Request signal routing chain / scene config (0x0F)
+   * Request signal routing chain / custom MIDI config (0x0F)
    */
   public static buildSignalChainRequest(): Uint8Array {
     return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.SIGNAL_CHAIN_ROUTING, 0x00, SYSEX_END]);
   }
 
   /**
-   * Request global EQ setup (0x14)
+   * Request global EQ / USB routing setup (0x14)
    */
   public static buildGlobalEqRequest(): Uint8Array {
     return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.GLOBAL_EQ_SETUP, 0x00, SYSEX_END]);
@@ -85,7 +128,7 @@ export class SysExEncoder {
   }
 
   /**
-   * Request/sync scene bank data (QuickTone stack build around setCurrentSceneIndex).
+   * Request/sync scene bank data (QuickTone).
    * WARNING: this triggers large SysEx dump replies — not a realtime scene select.
    * Prefer `buildSceneSelect` (CC 80) to change the active scene.
    */
@@ -93,7 +136,7 @@ export class SysExEncoder {
     const sceneVal = Math.min(2, Math.max(0, sceneNumber - 1));
     return new Uint8Array([
       ...NUX_SYSEX_HEADER,
-      SysExCommand.SCENE_SELECT,
+      SysExCommand.SCENE_CURRENT_DATA,
       0x00,
       0x00,
       sceneVal,
@@ -109,7 +152,6 @@ export class SysExEncoder {
 
   /**
    * Select active scene (1, 2, 3) using MIDI CC 80 (0x50).
-   * Pedal-local capture: Val 0 = Scene 1, 1 = Scene 2, 2 = Scene 3.
    */
   public static buildSceneSelect(sceneNumber: number, channel: number = 0): Uint8Array {
     const validScene = Math.min(3, Math.max(1, sceneNumber));
@@ -117,19 +159,13 @@ export class SysExEncoder {
     return this.buildControlChange(CC_MAPPINGS.SCENE_SELECT, sceneVal, channel);
   }
 
-  /**
-   * Build MIDI Program Change message (0xC0 [presetIndex])
-   */
   public static buildProgramChange(presetIndex: number, channel: number = 0): Uint8Array {
-    const status = 0xC0 | (channel & 0x0F);
-    return new Uint8Array([status, presetIndex & 0x7F]);
+    const status = 0xc0 | (channel & 0x0f);
+    return new Uint8Array([status, presetIndex & 0x7f]);
   }
 
-  /**
-   * Build MIDI Control Change message (0xB0 [ccNumber] [value])
-   */
   public static buildControlChange(ccNumber: number, value: number, channel: number = 0): Uint8Array {
-    const status = 0xB0 | (channel & 0x0F);
-    return new Uint8Array([status, ccNumber & 0x7F, value & 0x7F]);
+    const status = 0xb0 | (channel & 0x0f);
+    return new Uint8Array([status, ccNumber & 0x7f, value & 0x7f]);
   }
 }

@@ -21,8 +21,9 @@ Both QuickTone and the modeler send Program Changes MIDI messages when a patch i
 
 #### Control Changes (CC)
 
-For a complete list of Control Changes messages, see [Control Changes](ControlChanges.md)
+For a complete list of Control Changes messages, see [ControlChanges.md](ControlChanges.md).
 
+**Effect knobs are controlled with MIDI CC**, not SysEx. Example: Amp Knob 1 (Gain) = CC 24 → `B0 18 <0..100>`. See [Parameters.md](Parameters.md).
 
 ## System Exclusive Messages
 
@@ -107,6 +108,8 @@ These  are all the commands that I have identified so far. This is by no means a
 | `62`    | Set QuickTone version                                             |
 | `6C`    | Unknown                                                           |
 | `7E`    | Patch status (default/user)                                       |
+
+> **Parameters / knobs:** there is no SysEx “set param” command in this table. Realtime knob control uses MIDI CC ([ControlChanges.md](ControlChanges.md), [Parameters.md](Parameters.md)). Reading knobs uses the decoded body of `0B` / `0C` scene dumps (layout below).
 
 ## 03: Get/Set Tempo
 
