@@ -24,7 +24,8 @@ export const CC_MAPPINGS = {
 /**
  * Knob parameter MIDI CC base (QuickTone Settings → Custom MIDI / docs/ControlChanges.md).
  * CC number = baseCc + paramId (0-based knob index within the block).
- * Knob value range on the device map is 0..100.
+ * Note: While the QuickTone CC mapping slider uses 0..100, hardware SysEx knobs
+ * are 8-bit / bitpacked (0..255).
  */
 export const PARAM_CC_MAX = 100;
 
@@ -41,21 +42,25 @@ export const PARAM_CC_MAP: Record<BlockType, { baseCc: number; maxKnobs: number 
   IR: { baseCc: 66, maxKnobs: 6 },
   SR: { baseCc: 72, maxKnobs: 3 }, // Send, Return, SR Routing
   VOL: { baseCc: 75, maxKnobs: 3 }, // Patch Min, Patch Max, Patch Volume
-  CAB: null, // No dedicated CCs — IR slot covers cab/IR in the MIDI map
+  CAB: { baseCc: 66, maxKnobs: 6 }, // Alias to IR for API compatibility
 };
 
 /**
  * Resolve MIDI CC number for a block knob, or null if the block has no CC knobs.
  */
 export function paramToCc(block: BlockType, paramId: number): number | null {
-  const entry = PARAM_CC_MAP[block];
+  if (typeof paramId !== 'number' || !Number.isInteger(paramId)) {
+    return null;
+  }
+  const target: BlockType = block === 'CAB' ? 'IR' : block;
+  const entry = PARAM_CC_MAP[target];
   if (!entry) return null;
   if (paramId < 0 || paramId >= entry.maxKnobs) return null;
   return entry.baseCc + paramId;
 }
 
 /**
- * Scene dump block order (protocol.md §0B) — excludes CAB (IR covers cab/IR).
+ * Scene dump block order (protocol.md §0B) — 12 hardware blocks.
  */
 export const SCENE_DUMP_BLOCK_ORDER: BlockType[] = [
   'WAH', 'CMP', 'EFX', 'AMP', 'EQ', 'NG', 'MOD', 'DLY', 'RVB', 'IR', 'SR', 'VOL',
@@ -76,6 +81,7 @@ export const SCENE_DUMP_KNOB_SLOTS: Record<string, number> = {
   DLY: 8,
   RVB: 4,
   IR: 6,
+  CAB: 6, // Alias to IR
   SR: 3,
   VOL: 2,
 };
@@ -85,12 +91,13 @@ export const SCENE_MODEL_OFF_BIT = 0x40;
 
 /**
  * Byte offset of a block's model id inside the unpacked scene body (protocol.md §0B).
- * CAB is not present in the 12 model slots (IR covers cab/IR).
+ * Accepts CAB as alias to IR.
  */
 export function sceneModelOffset(block: BlockType): number {
-  const idx = SCENE_DUMP_BLOCK_ORDER.indexOf(block);
+  const target: BlockType = block === 'CAB' ? 'IR' : block;
+  const idx = SCENE_DUMP_BLOCK_ORDER.indexOf(target);
   if (idx < 0) {
-    throw new Error(`Block ${block} has no model slot in the scene dump (use IR for cab/IR).`);
+    throw new Error(`Block ${block} has no model slot in the scene dump.`);
   }
   return idx;
 }
@@ -98,13 +105,18 @@ export function sceneModelOffset(block: BlockType): number {
 /**
  * Byte offset of a knob value inside the unpacked scene body.
  * Layout: 12 model bytes, then per block [count][slot0..N-1].
+ * Accepts CAB as alias to IR.
  */
 export function sceneKnobOffset(block: BlockType, paramId: number): number {
+  if (typeof paramId !== 'number' || !Number.isInteger(paramId)) {
+    throw new Error(`Invalid paramId ${paramId}: must be an integer.`);
+  }
+  const target: BlockType = block === 'CAB' ? 'IR' : block;
   let offset = 12;
   for (const b of SCENE_DUMP_BLOCK_ORDER) {
     const slots = SCENE_DUMP_KNOB_SLOTS[b] ?? 0;
     offset += 1; // count byte
-    if (b === block) {
+    if (b === target) {
       if (paramId < 0 || paramId >= slots) {
         throw new Error(`Block ${block} param ${paramId} out of range (0..${slots - 1}).`);
       }
@@ -116,7 +128,8 @@ export function sceneKnobOffset(block: BlockType, paramId: number): number {
 }
 
 /**
- * Block types in signal routing order & index mapping
+ * Block types in signal routing order & index mapping (12 physical hardware blocks).
+ * CAB is an alias for IR (both map to index 9).
  */
 export const BLOCK_LIST: BlockType[] = [
   'WAH', // 0
@@ -128,10 +141,40 @@ export const BLOCK_LIST: BlockType[] = [
   'MOD', // 6
   'DLY', // 7
   'RVB', // 8
-  'CAB', // 9
-  'IR',  // 10
-  'SR',  // 11
-  'VOL'  // 12
+  'IR',  // 9
+  'SR',  // 10
+  'VOL'  // 11
+];
+
+/** Alias pointing to the 12 hardware blocks */
+export const HARDWARE_BLOCK_LIST: BlockType[] = BLOCK_LIST;
+export const HARDWARE_BLOCK_IDS = BLOCK_LIST;
+
+/**
+ * Cabinets / Impulse Response catalog
+ */
+const CAB_IR_MODELS = [
+  { id: 0, name: 'Jazz 212', description: '2x12 Roland JC-120 Cabinet' },
+  { id: 1, name: 'Black 112', description: '1x12 Fender Deluxe Reverb Cabinet' },
+  { id: 2, name: 'Tweed 410', description: '4x10 Fender Bassman Cabinet' },
+  { id: 3, name: 'Tweed 112', description: '1x12 Fender Tweed Deluxe Cabinet' },
+  { id: 4, name: 'Twin 212', description: '2x12 Fender Twin Reverb Cabinet' },
+  { id: 5, name: 'DR112', description: '1x12 Deluxe Reverb Cabinet' },
+  { id: 6, name: 'Vibro 212', description: '2x12 Vibro-King Cabinet' },
+  { id: 7, name: 'Super 212', description: '2x12 Super Reverb Cabinet' },
+  { id: 8, name: 'Brit 212', description: '2x12 Vox AC30 Cabinet' },
+  { id: 9, name: 'Brit 412', description: '4x12 Marshall 1960A Cabinet' },
+  { id: 10, name: 'Green 412', description: '4x12 Marshall Greenback Cabinet' },
+  { id: 11, name: 'Rect 412', description: '4x12 Mesa Rectifier Cabinet' },
+  { id: 12, name: 'SLO 412', description: '4x12 Soldano Cabinet' },
+  { id: 13, name: 'HBE 412', description: '4x12 Friedman BE-100 Cabinet' },
+  { id: 14, name: 'Botm 412', description: '4x12 Bogner Ecstasy Cabinet' },
+  { id: 15, name: 'Eden 410', description: '4x10 Eden Bass Cabinet' },
+  { id: 16, name: 'AGL DB810', description: '8x10 Aguilar Bass Cabinet' },
+  { id: 17, name: 'Amp SV810', description: '8x10 Ampeg SVT Bass Cabinet' },
+  { id: 18, name: 'Amp SV410', description: '4x10 Ampeg SVT Bass Cabinet' },
+  { id: 19, name: 'Amp SV212', description: '2x12 Ampeg SVT Bass Cabinet' },
+  { id: 20, name: 'User IR 1-24', description: 'Custom User Impulse Response Slots' }
 ];
 
 /**
@@ -240,32 +283,8 @@ export const NUX_MODEL_CATALOG: Record<BlockType, { id: number; name: string; de
     { id: 4, name: 'Shimmer', description: 'Octave pitched shimmer reverb' },
     { id: 5, name: 'Damp Reverb', description: 'High frequency damped reverb' }
   ],
-  CAB: [
-    { id: 0, name: 'Jazz 212', description: '2x12 Roland JC-120 Cabinet' },
-    { id: 1, name: 'Black 112', description: '1x12 Fender Deluxe Reverb Cabinet' },
-    { id: 2, name: 'Tweed 410', description: '4x10 Fender Bassman Cabinet' },
-    { id: 3, name: 'Tweed 112', description: '1x12 Fender Tweed Deluxe Cabinet' },
-    { id: 4, name: 'Twin 212', description: '2x12 Fender Twin Reverb Cabinet' },
-    { id: 5, name: 'DR112', description: '1x12 Deluxe Reverb Cabinet' },
-    { id: 6, name: 'Vibro 212', description: '2x12 Vibro-King Cabinet' },
-    { id: 7, name: 'Super 212', description: '2x12 Super Reverb Cabinet' },
-    { id: 8, name: 'Brit 212', description: '2x12 Vox AC30 Cabinet' },
-    { id: 9, name: 'Brit 412', description: '4x12 Marshall 1960A Cabinet' },
-    { id: 10, name: 'Green 412', description: '4x12 Marshall Greenback Cabinet' },
-    { id: 11, name: 'Rect 412', description: '4x12 Mesa Rectifier Cabinet' },
-    { id: 12, name: 'SLO 412', description: '4x12 Soldano Cabinet' },
-    { id: 13, name: 'HBE 412', description: '4x12 Friedman BE-100 Cabinet' },
-    { id: 14, name: 'Botm 412', description: '4x12 Bogner Ecstasy Cabinet' },
-    { id: 15, name: 'Eden 410', description: '4x10 Eden Bass Cabinet' },
-    { id: 16, name: 'AGL DB810', description: '8x10 Aguilar Bass Cabinet' },
-    { id: 17, name: 'Amp SV810', description: '8x10 Ampeg SVT Bass Cabinet' },
-    { id: 18, name: 'Amp SV410', description: '4x10 Ampeg SVT Bass Cabinet' },
-    { id: 19, name: 'Amp SV212', description: '2x12 Ampeg SVT Bass Cabinet' },
-    { id: 20, name: 'User IR 1-24', description: 'Custom User Impulse Response Slots' }
-  ],
-  IR: [
-    { id: 0, name: 'Default IR', description: 'Impulse Response Cabinet Model' }
-  ],
+  CAB: CAB_IR_MODELS,
+  IR: CAB_IR_MODELS,
   SR: [
     { id: 0, name: 'Send/Return Loop', description: 'FX Loop Send & Return' }
   ],
@@ -273,6 +292,15 @@ export const NUX_MODEL_CATALOG: Record<BlockType, { id: number; name: string; de
     { id: 0, name: 'Volume Pedal', description: 'Master Volume Block' }
   ]
 };
+
+const IR_PARAM_CATALOG = [
+  { id: 0, name: 'Knob 1' },
+  { id: 1, name: 'Knob 2' },
+  { id: 2, name: 'Level' },
+  { id: 3, name: 'Low Cut' },
+  { id: 4, name: 'High Cut' },
+  { id: 5, name: 'Knob 6' },
+];
 
 /**
  * Knob names aligned with scene-dump order (protocol.md §0B) and ControlChanges.md knob indices.
@@ -351,21 +379,8 @@ export const NUX_BLOCK_PARAM_CATALOG: Record<BlockType, { id: number; name: stri
     { id: 2, name: 'Shim' },
     { id: 3, name: 'Knob 4' },
   ],
-  CAB: [
-    { id: 0, name: 'Level' },
-    { id: 1, name: 'Low Cut' },
-    { id: 2, name: 'High Cut' },
-    { id: 3, name: 'Mic Type' },
-    { id: 4, name: 'Distance' },
-  ],
-  IR: [
-    { id: 0, name: 'Knob 1' },
-    { id: 1, name: 'Knob 2' },
-    { id: 2, name: 'Level' },
-    { id: 3, name: 'Low Cut' },
-    { id: 4, name: 'High Cut' },
-    { id: 5, name: 'Knob 6' },
-  ],
+  CAB: IR_PARAM_CATALOG,
+  IR: IR_PARAM_CATALOG,
   SR: [
     { id: 0, name: 'Send' },
     { id: 1, name: 'Return' },
@@ -379,63 +394,32 @@ export const NUX_BLOCK_PARAM_CATALOG: Record<BlockType, { id: number; name: stri
 };
 
 export function findBlockParam(blockInput?: string, paramInput?: string | number): { block: BlockType; paramId: number; paramName: string } {
-  let targetBlock: BlockType = 'AMP';
-  let targetParamStr: string | number = 'Gain';
-
+  let block: BlockType | undefined;
+  let selector: string | number;
   if (blockInput && paramInput !== undefined) {
-    try {
-      targetBlock = idToBlockType(blockTypeToId(blockInput));
-    } catch {
-      targetBlock = 'AMP';
-    }
-    targetParamStr = paramInput;
+    block = idToBlockType(blockTypeToId(blockInput)); selector = paramInput;
   } else if (blockInput) {
-    try {
-      const bId = blockTypeToId(blockInput);
-      targetBlock = idToBlockType(bId);
-      targetParamStr = NUX_BLOCK_PARAM_CATALOG[targetBlock]?.[0]?.name || 'Gain';
-    } catch {
-      targetParamStr = blockInput;
-      for (const b of BLOCK_LIST) {
-        const cat = NUX_BLOCK_PARAM_CATALOG[b];
-        if (cat && cat.some(p => p.name.toLowerCase() === blockInput.toLowerCase())) {
-          targetBlock = b;
-          break;
-        }
-      }
-    }
+    try { block = idToBlockType(blockTypeToId(blockInput)); } catch { /* Treat a single argument as a parameter name. */ }
+    selector = block ? (NUX_BLOCK_PARAM_CATALOG[block][0]?.name ?? '0') : blockInput;
+  } else { block = 'AMP'; selector = paramInput ?? 'Gain'; }
+  if (typeof selector === 'number' || /^\d+$/.test(String(selector))) {
+    if (!block) throw new Error('A numeric parameter index requires an explicit block.');
+    const paramId = Number(selector); sceneKnobOffset(block, paramId);
+    return { block, paramId, paramName: NUX_BLOCK_PARAM_CATALOG[block].find(p => p.id === paramId)?.name ?? `Param #${paramId}` };
   }
-
-  const catalog = NUX_BLOCK_PARAM_CATALOG[targetBlock] || NUX_BLOCK_PARAM_CATALOG['AMP'];
-  let paramId = 0;
-  let paramName = catalog[0]?.name || 'Gain';
-
-  if (typeof targetParamStr === 'number' || !isNaN(Number(targetParamStr))) {
-    const pNum = Number(targetParamStr);
-    const found = catalog.find(p => p.id === pNum);
-    if (found) {
-      paramId = found.id;
-      paramName = found.name;
-    } else {
-      paramId = pNum;
-      paramName = `Param #${pNum}`;
-    }
-  } else {
-    const searchStr = targetParamStr.toString().toLowerCase();
-    const found = catalog.find(p => p.name.toLowerCase() === searchStr || p.name.toLowerCase().includes(searchStr));
-    if (found) {
-      paramId = found.id;
-      paramName = found.name;
-    } else {
-      paramName = targetParamStr.toString();
-    }
-  }
-
-  return { block: targetBlock, paramId, paramName };
+  const search = String(selector).trim().toLowerCase();
+  if (!search) throw new Error('Parameter name cannot be empty.');
+  const candidates = (block ? [block] : BLOCK_LIST).flatMap(b => NUX_BLOCK_PARAM_CATALOG[b].map(p => ({ block: b, paramId: p.id, paramName: p.name })));
+  const exact = candidates.filter(p => p.paramName.toLowerCase() === search);
+  const matches = exact.length ? exact : candidates.filter(p => p.paramName.toLowerCase().includes(search));
+  if (matches.length !== 1) throw new Error(matches.length ? `Ambiguous parameter "${selector}"; specify a block.` : `Unknown parameter "${selector}".`);
+  sceneKnobOffset(matches[0].block, matches[0].paramId);
+  return matches[0];
 }
 
 export function getModelName(block: BlockType, modelId: number): string {
-  const list = NUX_MODEL_CATALOG[block];
+  const target: BlockType = block === 'CAB' ? 'IR' : block;
+  const list = NUX_MODEL_CATALOG[target];
   if (!list) return `Model #${modelId}`;
   const found = list.find(m => m.id === modelId);
   return found ? found.name : `Model #${modelId}`;
@@ -445,7 +429,8 @@ export function findModel(
   block: BlockType,
   selector: string | number
 ): { id: number; name: string; description?: string } {
-  const list = NUX_MODEL_CATALOG[block] || [];
+  const target: BlockType = block === 'CAB' ? 'IR' : block;
+  const list = NUX_MODEL_CATALOG[target] || [];
   if (list.length === 0) {
     throw new Error(`Bloco ${block} não possui modelos no catálogo.`);
   }
@@ -477,31 +462,39 @@ export function findModel(
 
 export function blockTypeToId(block: BlockType | number | string): number {
   if (typeof block === 'number') {
-    if (block < 0 || block >= BLOCK_LIST.length) {
-      throw new Error(`Invalid block ID ${block}. Expected number between 0 and ${BLOCK_LIST.length - 1}.`);
+    if (!Number.isInteger(block) || block < 0 || block >= BLOCK_LIST.length) {
+      throw new Error(`Invalid block ID ${block}. Expected integer between 0 and ${BLOCK_LIST.length - 1}.`);
     }
     return block;
   }
-  const str = block.toString().toUpperCase().replace('/', '');
-  const idx = BLOCK_LIST.findIndex(b => b.toUpperCase() === str || (b === 'SR' && str === 'S/R'));
+  const str = block.toString().toUpperCase().trim().replace('/', '');
+  if (str === 'CAB' || str === 'IR') {
+    return 9;
+  }
+  if (str === 'SR' || str === 'S/R') {
+    return 10;
+  }
+  const idx = BLOCK_LIST.findIndex(b => b.toUpperCase() === str);
   if (idx === -1) {
-    throw new Error(`Unknown block name "${block}". Expected one of: ${BLOCK_LIST.join(', ')}.`);
+    throw new Error(`Unknown block name "${block}". Expected one of: ${BLOCK_LIST.join(', ')}, CAB.`);
   }
   return idx;
 }
 
 export function idToBlockType(id: number): BlockType {
-  const block = BLOCK_LIST[id];
-  if (!block) {
-    throw new Error(`Invalid block ID ${id}.`);
+  if (typeof id !== 'number' || !Number.isInteger(id) || id < 0 || id >= BLOCK_LIST.length) {
+    throw new Error(`Invalid block ID ${id}. Expected integer between 0 and ${BLOCK_LIST.length - 1}.`);
   }
-  return block;
+  return BLOCK_LIST[id];
 }
 
 /**
  * Helper to convert 0-indexed Program Change (0..127) to MG-30 preset string (e.g. 0 -> "01A", 1 -> "01B", 4 -> "02A")
  */
 export function programChangeToPresetName(pc: number): { bank: number; channel: 'A' | 'B' | 'C' | 'D'; name: string } {
+  if (typeof pc !== 'number' || !Number.isInteger(pc) || pc < 0 || pc > 127) {
+    throw new Error(`Invalid program change number ${pc}. Must be an integer between 0 and 127.`);
+  }
   const bank = Math.floor(pc / 4) + 1;
   const channels: ('A' | 'B' | 'C' | 'D')[] = ['A', 'B', 'C', 'D'];
   const channel = channels[pc % 4];
@@ -517,6 +510,9 @@ export function programChangeToPresetName(pc: number): { bank: number; channel: 
  * Helper to convert preset string (e.g. "01A", "02C") to 0-indexed Program Change byte (0..127)
  */
 export function presetNameToProgramChange(presetStr: string): number {
+  if (typeof presetStr !== 'string') {
+    throw new Error(`Invalid preset string: must be a string.`);
+  }
   const match = presetStr.trim().toUpperCase().match(/^(\d{1,2})([A-D])$/);
   if (!match) {
     throw new Error(`Invalid preset format "${presetStr}". Expected format like "01A" or "12C".`);

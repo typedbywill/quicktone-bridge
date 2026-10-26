@@ -1,308 +1,130 @@
-# NUX CLI (`nux`)
+# CLI da NUX MG-30
 
-Guia de uso da CLI para controlar o **NUX MG-30** via USB MIDI / SysEx.
-
-O binário principal é `nux` (alias: `quicktone-bridge`). Ajuda agrupada:
+Requer Node.js 20+, MIDI nativo e MG-30 ligada por USB para comandos de hardware. No Nix, execute `nix-shell` para disponibilizar ALSA ao módulo MIDI. A ajuda e os catálogos locais funcionam sem abrir portas MIDI.
 
 ```bash
-nux --help
-nux <comando> --help
-```
-
-## Requisitos
-
-- Node.js 18+
-- NUX MG-30 ligado e conectado por USB
-- Porta MIDI do MG-30 disponível no sistema (Windows/macOS/Linux)
-
-## Instalação
-
-### Global (recomendado)
-
-```bash
-npm install -g .
-# ou, a partir do repo:
+npm ci
+npm run build
+node dist/cli.js --help
+npm run nux -- ports
+# Opcional: disponibilizar o comando nux globalmente
 npm run install:cli
 ```
 
-Depois:
+Cada comando conecta, consulta o aparelho e fecha suas portas ao terminar. Não existe sessão em segundo plano nem cache de estado. Códigos de saída: 0 para conclusão, 1 para argumentos inválidos, timeout ou falha de operação.
+
+## Conexão e diagnóstico
 
 ```bash
-nux --help
+nux ports                      # Lista índices e nomes sem conectar ao aparelho
+nux --input 1 --output 1 status
+nux --timeout 5000 --json ping  # Tempo de ida/volta real
+nux doctor                     # Estado, portas e ambiente Node
+nux info
+nux connect                    # Abre, sincroniza e fecha
+nux disconnect                 # Explica o ciclo por comando
+nux sync                       # As três cenas correntes
+nux dump --scene 2             # Payload bruto de uma cena
+nux logs                       # MIDI recebido/enviado até Ctrl+C
+nux device info
+nux device firmware
 ```
 
-### Sem instalar globalmente
+`--input` e `--output` aceitam nome ou índice. Não há fallback para uma porta de outro equipamento; nomes ambíguos precisam de seleção explícita. `--json` produz saída de dados em JSON e erros em JSON no stderr. O comando `device reboot` retorna erro, pois não existe uma operação comprovada implementada para isso.
+
+## Presets e persistência
+
+Slots `01A` a `32D`, ou índices numéricos de 0 a 127. Cenas são numeradas de 1 a 3.
 
 ```bash
-# Desenvolvimento (tsx, sem build)
-npm run nux -- --help
-npm run nux -- ping
-
-# Build local
-npm run build
-npm start -- --help
-```
-
-Remover instalação global:
-
-```bash
-npm run uninstall:cli
-```
-
-## Conceitos rápidos
-
-### Presets
-
-128 slots, nomeados `01A` … `32D` (32 bancos × canais A–D), ou índice Program Change `0`–`127`.
-
-Aceitos em qualquer comando de preset:
-
-| Forma | Exemplo |
-| ----- | ------- |
-| Nome | `01A`, `05C`, `32D` |
-| Índice | `0`, `4`, `127` |
-
-### Cenas
-
-Cada preset tem 3 cenas: `1`, `2`, `3`. Troca via CC 80.
-
-### Blocos
-
-IDs (case-insensitive): `WAH`, `NG`, `CMP`, `MOD`, `EFX`, `AMP`, `IR`, `EQ`, `SR`, `DLY`, `RVB`, `VOL`, `CAB`.
-
-Parâmetros (knobs) usam faixa **0–100**. Detalhes em [Parameters.md](Parameters.md).
-
-### Estado local
-
-A CLI guarda um cache em `~/.nux-mg30-state.json` (preset atual, cena, ON/OFF de blocos, knobs). Útil para `preset up/down` e `block toggle` sem dump. O hardware continua sendo a fonte da verdade quando o dump SysEx responde.
-
----
-
-## Status e conexão
-
-```bash
-nux ping          # Heartbeat — confirma que o MG-30 responde
-nux status        # Status + lista de portas MIDI In/Out
-nux info          # Info do cliente / modo CLI
-nux connect       # Abre a conexão MIDI (falha se o pedaleiro não estiver presente)
-nux disconnect    # Encerra a sessão MIDI
-nux sync          # Solicita dump do patch ativo e sincroniza
-nux doctor        # Diagnóstico: Node, OS, portas MIDI, conexão
-```
-
-Fluxo típico ao ligar o pedaleiro:
-
-```bash
-nux doctor
-nux ping
-nux sync
-```
-
----
-
-## Presets
-
-```bash
-nux preset list
-nux preset show 01A
-nux preset load 01A
-nux preset up              # próximo (usa o PC persistido, ou [id] como base)
+nux preset list --from 01A --limit 8
+nux preset show 01A             # As três cenas salvas
+nux preset load 02B             # Recall e confirmação de estado
+nux preset up
 nux preset down
-nux preset save            # salva no slot ativo
-nux preset save 02B        # salva no slot indicado
-nux preset rename 01A Meu Tone
-nux preset clone 01A 02A
-nux preset delete 03C      # reseta o slot para baseline limpa
-nux preset backup          # JSON com timestamp (dump do preset ativo)
-nux preset restore <arquivo>
-nux preset export 01A              # → 01A.json
-nux preset export 01A meu.json
-nux preset import meu.json
+nux preset save                 # Salva as três cenas correntes no slot ativo
+nux preset save 03A             # Salva as três cenas em outro slot
+nux preset rename 03A "Meu Som" # Recall, nome nas três cenas e persistência
+nux preset clone 01A 02A        # Copia todas as cenas salvas sem recall
+nux preset delete 02A           # Bypass dos efeitos, preserva parâmetros e VOL
+nux preset delete 02A --keep-amp-cab
 ```
 
-Exemplos:
+`delete` não reproduz um preset de fábrica: salva um estado de bypass nas três cenas. `preset rename`, `preset load` e `preset delete` podem fazer recall e substituir edições ainda não salvas no buffer corrente.
 
-```bash
-nux preset load 05B
-nux preset rename 05B Worship Clean
-nux preset clone 05B 06A
-```
+Edições comuns modificam o buffer corrente por `0C`; não persistem automaticamente. `--save` nos comandos abaixo salva **as três cenas correntes**, inclusive outras edições já existentes. Cada gravação aguarda ACK e leitura de volta; sucesso exige comparar o corpo inteiro. Uma falha pode ocorrer depois de uma cena já ter sido salva.
 
----
-
-## Cenas
+## Cenas, efeitos e parâmetros
 
 ```bash
 nux scene list
-nux scene show             # cena ativa
 nux scene show 2
-nux scene 1                # atalhos
-nux scene 2
-nux scene 3
-nux scene select 2
-nux scene up               # 1 → 2 → 3 → 1
+nux scene select 2              # Usa o mapa Custom MIDI do aparelho
+nux scene up
 nux scene down
-nux scene clone 1 2        # copia estados de bloco (persistidos) 1 → 2
-nux scene reset 3
-```
-
----
-
-## Blocos
-
-### Ligar / desligar
-
-Sintaxe curta ou subcomandos equivalentes:
-
-```bash
-nux block AMP              # mostra ON/OFF
+nux scene clone 1 3 --save      # Corpo completo: modelos, parâmetros, campos opacos
+nux scene reset 2               # Bypass dos efeitos, preserva VOL e parâmetros
+nux block list                 # Catálogo local de modelos
+nux block AMP                  # Estado real
 nux block AMP on
-nux block AMP off
-nux block AMP toggle
-
-nux block enable DLY
-nux block disable RVB
-nux block toggle MOD
-nux block state EFX on
-```
-
-Sinônimos aceitos em `on`/`off`: `enable`, `1`, `ligado` / `disable`, `0`, `desligado`, etc.
-
-### Listar e inspecionar
-
-```bash
-nux block list
-nux block show AMP
-nux block params           # knobs de todos os blocos
+nux block state AMP off --save
+nux block show IR
+nux block enable AMP
+nux block disable AMP
+nux block toggle AMP --save
+nux block model AMP             # Catálogo local deste bloco
+nux block model AMP 6 --save
+nux block reset AMP             # Seleciona modelo zero, não inventa defaults
 nux block params AMP
-```
-
-### Modelo
-
-```bash
-nux block model AMP        # lista modelos do catálogo
-nux block model AMP 6      # seleciona por ID
-nux block model AMP "nome" # por nome (quando existir no catálogo)
-nux block reset AMP        # volta ao modelo 0
-```
-
-### Parâmetros (knobs)
-
-```bash
 nux block get AMP Gain
-nux block set AMP Gain 80
+nux block set AMP Gain 80 --save
 nux block min AMP Gain
 nux block max AMP Gain
+nux param get AMP Gain          # Alias dos comandos de parâmetro
+nux param set MOD 2 214 --raw
+nux tempo 120 --save
+nux tempo
 ```
 
-Também funciona só com o nome do parâmetro quando ele é único no catálogo:
+Existem 12 blocos físicos: `WAH CMP EFX AMP EQ NG MOD DLY RVB IR SR VOL`. `CAB` é alias de `IR`. Parâmetros comuns aceitam inteiros de 0 a 100; `--raw` aceita um byte de 0 a 255. Nomes de parâmetros/modelos vêm de um catálogo local, cujas legendas podem variar conforme modelo e firmware. Detalhes em [Parameters.md](Parameters.md).
+
+## Cadeia
 
 ```bash
-nux block set Gain 75
+nux chain show
+nux chain move DLY RVB          # Move DLY imediatamente antes de RVB
+nux chain swap AMP IR --save
+nux chain reset --save          # Ordem dos IDs de hardware 0..11
 ```
 
-Sem argumentos, `nux block get` lista os knobs do **AMP**.
+A ordem tem exatamente os 12 blocos, sem duplicar CAB/IR. O byte de configuração recebido do aparelho é preservado ao reorganizar.
 
-Leitura e escrita usam dump/escrita SysEx da cena (`0C` / `0B`). Ver [Parameters.md](Parameters.md).
-
----
-
-## Cadeia de sinal
+## Exportação, backup e restauração
 
 ```bash
-nux chain show             # ordem atual (do dump, se disponível)
+nux preset export 01A preset.json
+nux preset export 01A preset.syx
+nux preset export 01A editado.json --current
+nux preset import preset.json --to 02A --dry-run
+nux preset import preset.json --to 02A
+nux preset backup banco.json
+nux preset restore banco.json --dry-run
+nux preset restore banco.json
+# Aliases
+nux export preset 01A preset.json
+nux export bank banco.json
+nux import preset preset.json --to 02A
+nux import bank banco.json
 ```
 
-`chain reset`, `chain move` e `chain swap` **não são suportados** pelo MG-30 via MIDI — a CLI informa isso explicitamente.
+O padrão de exportação lê dados salvos. `--current` exige que o slot solicitado seja o ativo e exporta o buffer de edição. Cada preset contém as três cenas; o banco contém 128 presets e 384 cenas. Os bytes opacos são conservados, mas amostras de IR, configurações globais e firmware não estão incluídos.
 
----
+JSON usa o formato próprio `quicktone-bridge`, versão 1, com SHA-256 por corpo de cena. SysEx `.syx` contém exatamente três frames completos de cena do mesmo preset. Arquivos incompletos, checksums incorretos e outros comandos SysEx são rejeitados. Arquivos nativos `.mg30patch` não são suportados.
 
-## Hardware
+A CLI valida o arquivo inteiro antes de conectar. `--dry-run` valida sem MIDI; `--to` vale somente para arquivos de um preset. Exportações usam publicação atômica e não sobrescrevem arquivos existentes sem `--force`. Restaurações param na primeira falha, informando slot e progresso concluído; o dispositivo não oferece rollback do banco.
 
-```bash
-nux device info
-```
+## Validação desta revisão
 
-`device firmware` e `device reboot` **não são suportados** via MIDI neste pedaleiro.
+`npm test` exercita protocolo, transportes, CLI e dispositivo virtual; `npm run build` produz os binários e tipos. No ambiente Nix, use `nix-shell --run 'npm test'`.
 
----
-
-## Export / import
-
-Além de `preset export` / `preset import`:
-
-```bash
-nux export preset 01A tone.json
-nux import preset tone.json
-nux export bank bank.json
-nux import bank bank.json
-```
-
-Os arquivos de preset são JSON com metadados e, quando o dump responde, o campo `dumpHex` (bytes SysEx em hex).
-
----
-
-## Diagnóstico
-
-```bash
-nux doctor                 # ambiente + MIDI + detecção do MG-30
-nux dump                   # hex dump do SysEx do patch ativo
-nux logs                   # ainda não implementado
-nux --version
-```
-
----
-
-## Exemplos de fluxo
-
-### Trocar preset e ajustar amp
-
-```bash
-nux connect
-nux preset load 02A
-nux scene 1
-nux block AMP on
-nux block model AMP 6
-nux block set AMP Gain 72
-nux block set AMP Volume 65
-nux preset save
-```
-
-### Montar um lead rápido na cena 3
-
-```bash
-nux scene 3
-nux block DLY on
-nux block RVB on
-nux block set DLY Level 45
-nux block set RVB Mix 30
-```
-
-### Backup antes de experimentar
-
-```bash
-nux preset export 01A backups/01A.json
-# … edições …
-nux preset import backups/01A.json
-```
-
----
-
-## Limitações conhecidas
-
-| Recurso | Status |
-| ------- | ------ |
-| Reordenar cadeia (`chain move/swap/reset`) | Não suportado pelo hardware via MIDI |
-| Firmware / reboot remoto | Não suportado |
-| Logs de comunicação (`nux logs`) | Não implementado |
-| Backup/restore completo dos 128 presets | Parcial — hoje captura principalmente o patch ativo |
-| CC de knobs via USB | Não atualiza o edit buffer; a CLI usa SysEx `0B` (ver [Parameters.md](Parameters.md)) |
-
----
-
-## Documentação relacionada
-
-- [QuickTone.md](QuickTone.md) — como a CLI espelha o editor oficial
-- [protocol.md](protocol.md) — comandos SysEx
-- [ControlChanges.md](ControlChanges.md) — mapa de MIDI CC
-- [Parameters.md](Parameters.md) — contrato get/set de parâmetros
+A validação em uma MG-30 física ainda está pendente. Comece por `ports`, `doctor`, `ping`, `sync` e uma exportação de leitura; os testes simulados não confirmam tempos de resposta, variações de firmware ou disponibilidade das portas no seu sistema. Evidências estáticas e limites estão em [QuickTone.md](QuickTone.md).

@@ -63,9 +63,6 @@ export class NodeTransport extends BaseTransport {
       await this.disconnect();
     }
 
-    const input = this.getInput();
-    const output = this.getOutput();
-
     const inPort = this.findPortIndex(this.listInputPorts(), inputPortIndexOrName);
     const outPort = this.findPortIndex(this.listOutputPorts(), outputPortIndexOrName);
 
@@ -76,13 +73,44 @@ export class NodeTransport extends BaseTransport {
       throw new Error(`Output MIDI port not found matching "${outputPortIndexOrName}".`);
     }
 
-    input.openPort(inPort);
-    output.openPort(outPort);
-    this.isConnected = true;
+    const input = this.getInput();
+    const output = this.getOutput();
 
-    input.on('message', (deltaTime: number, message: number[]) => {
-      this.notifyMessage(deltaTime, new Uint8Array(message));
-    });
+    let inputOpened = false;
+    let outputOpened = false;
+
+    try {
+      input.openPort(inPort);
+      inputOpened = true;
+
+      output.openPort(outPort);
+      outputOpened = true;
+
+      input.removeAllListeners();
+      input.on('message', (deltaTime: number, message: number[]) => {
+        this.notifyMessage(deltaTime, new Uint8Array(message));
+      });
+
+      this.isConnected = true;
+    } catch (err) {
+      this.isConnected = false;
+      if (inputOpened || this.input) {
+        try {
+          this.input?.removeAllListeners();
+        } catch {}
+        try {
+          this.input?.closePort();
+        } catch {}
+      }
+      if (outputOpened || this.output) {
+        try {
+          this.output?.closePort();
+        } catch {}
+      }
+      this.input = null;
+      this.output = null;
+      throw err;
+    }
   }
 
   public async disconnect(): Promise<void> {
@@ -92,9 +120,6 @@ export class NodeTransport extends BaseTransport {
 
     this.isConnected = false;
 
-    // On Windows, closePort() can block indefinitely if a large SysEx flood is
-    // in flight (e.g. scene-bank dumps). Drop listeners and release refs first;
-    // defer close so callers (CLI) can process.exit cleanly.
     const input = this.input;
     const output = this.output;
     this.input = null;
@@ -104,11 +129,9 @@ export class NodeTransport extends BaseTransport {
       try {
         input.removeAllListeners();
       } catch {}
-      setImmediate(() => {
-        try {
-          input.closePort();
-        } catch {}
-      });
+      try {
+        input.closePort();
+      } catch {}
     }
 
     if (output) {
@@ -134,4 +157,3 @@ export class NodeTransport extends BaseTransport {
     return findMatchingPortIndex(ports, identifier);
   }
 }
-

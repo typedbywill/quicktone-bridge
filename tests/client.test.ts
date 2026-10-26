@@ -130,10 +130,11 @@ describe('NuxMG30Client Parameter Encoding Tests', () => {
   });
 
   it('should encode 0B scene data set with preset/scene prefix', () => {
-    const body = [0x01, 0x02, 0x03];
+    const body = Array.from({ length: 213 }, (_, i) => i % 3 === 0 ? 1 : 2);
     const msg = SysExEncoder.buildSceneDataSet(4, 1, body);
     expect(Array.from(msg.slice(0, 8))).toEqual([0xf0, 0x43, 0x58, 0x70, 0x0b, 0x01, 0x04, 0x01]);
-    expect(Array.from(msg.slice(8, 11))).toEqual(body);
+    expect(Array.from(msg.slice(8, -1))).toEqual(body);
+    expect(msg.length).toBe(222);
     expect(msg[msg.length - 1]).toBe(0xf7);
   });
 });

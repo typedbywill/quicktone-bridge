@@ -1,195 +1,75 @@
-import {
-  NUX_SYSEX_HEADER,
-  SYSEX_END,
-  blockTypeToId,
-  idToBlockType,
-  presetNameToProgramChange,
-  CC_MAPPINGS,
-  paramToCc,
-  PARAM_CC_MAX,
-} from '../constants.js';
+import { NUX_SYSEX_HEADER, blockTypeToId, idToBlockType, presetNameToProgramChange, CC_MAPPINGS, paramToCc } from '../constants.js';
 import { SysExCommand, SysExDirection, BlockType } from '../types.js';
+import { integer, encodedSceneBody } from './validation.js';
 
 export class SysExEncoder {
-  /**
-   * Builds a raw NUX MG-30 SysEx packet
-   * `F0 43 58 70 [CMD] [DIR] [PAYLOAD...] F7`
-   */
-  public static buildSysExPacket(
-    command: SysExCommand | number,
-    direction: SysExDirection | number = SysExDirection.HOST_TO_DEVICE,
-    payload: number[] | Uint8Array = []
-  ): Uint8Array {
-    const payloadArr = Array.from(payload);
-    const bytes = [
-      ...NUX_SYSEX_HEADER,
-      command & 0x7f,
-      direction & 0x7f,
-      ...payloadArr,
-      SYSEX_END,
-    ];
-    return new Uint8Array(bytes);
+  public static buildSysExPacket(command: number, direction: number = SysExDirection.HOST_TO_DEVICE, payload: number[] | Uint8Array = []): Uint8Array {
+    integer(command, 0, 127, 'Command'); integer(direction, 0, 127, 'Operation');
+    for (const b of payload) integer(b, 0, 127, 'SysEx data byte');
+    return Uint8Array.from([...NUX_SYSEX_HEADER, command, direction, ...payload, 0xf7]);
   }
-
-  /**
-   * Request scene data (protocol.md command `0C`).
-   * Query: F0 43 58 70 0C 00 00 <scene0..2> 00 00 00 00 00 00 F7
-   * `sceneIndex` is 0-based (0=Scene1, 1=Scene2, 2=Scene3).
-   */
-  public static buildPatchDumpRequest(sceneIndex: number = 0): Uint8Array {
-    const scene = Math.min(2, Math.max(0, sceneIndex | 0));
-    return new Uint8Array([
-      ...NUX_SYSEX_HEADER,
-      SysExCommand.SCENE_CURRENT_DATA,
-      0x00,
-      0x00,
-      scene,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      SYSEX_END,
-    ]);
+  public static buildPatchDumpRequest(sceneIndex = 0): Uint8Array {
+    integer(sceneIndex, 0, 2, 'Scene index');
+    return this.buildSysExPacket(0x0c, 0, [0, sceneIndex, 0, 0, 0, 0, 0, 0]);
   }
-
-  /**
-   * Write saved scene body (protocol.md command `0B` set).
-   * `encodedBody` must already be 7-bit packed (no preset/scene prefix).
-   */
-  public static buildSceneDataSet(
-    preset: number,
-    sceneIndex: number,
-    encodedBody: Uint8Array | number[]
-  ): Uint8Array {
-    const scene = Math.min(2, Math.max(0, sceneIndex | 0));
-    const body = encodedBody instanceof Uint8Array ? encodedBody : new Uint8Array(encodedBody);
-    return new Uint8Array([
-      ...NUX_SYSEX_HEADER,
-      SysExCommand.SCENE_SAVED_DATA,
-      SysExDirection.HOST_TO_DEVICE,
-      preset & 0x7f,
-      scene,
-      ...body,
-      SYSEX_END,
-    ]);
+  public static buildSavedSceneRequest(preset: number, sceneIndex: number): Uint8Array {
+    integer(preset, 0, 127, 'Preset'); integer(sceneIndex, 0, 2, 'Scene index');
+    return this.buildSysExPacket(0x0b, 0, [preset, sceneIndex, 0, 0, 0, 0, 0, 0]);
   }
-
-  /**
-   * Toggle an effect block ON or OFF using MIDI CC.
-   * NUX MG-30 uses 0x00 for ON (Enabled) and 0x41 for OFF (Disabled).
-   */
-  public static buildBlockToggle(block: BlockType | number, enabled: boolean): Uint8Array {
-    const blockId = blockTypeToId(block);
-    const value = enabled ? 0x00 : 0x41;
-    return this.buildControlChange(blockId, value);
+  public static buildSceneDataSet(preset: number, sceneIndex: number, encodedBody: Uint8Array | number[]): Uint8Array {
+    return this.sceneSet(0x0b, preset, sceneIndex, encodedBody);
   }
-
-  /**
-   * Select an effect model for a block (0x03)
-   */
-  public static buildModelSelect(block: BlockType | number, modelId: number): Uint8Array {
-    const blockId = typeof block === 'number' ? block : blockTypeToId(block);
-    return new Uint8Array([
-      ...NUX_SYSEX_HEADER,
-      SysExCommand.MODEL_SELECT,
-      SysExDirection.HOST_TO_DEVICE,
-      blockId & 0x7f,
-      modelId & 0x7f,
-      SYSEX_END,
-    ]);
+  public static buildCurrentSceneDataSet(preset: number, sceneIndex: number, encodedBody: Uint8Array | number[]): Uint8Array {
+    return this.sceneSet(0x0c, preset, sceneIndex, encodedBody);
   }
-
-  /**
-   * Set a block knob via MIDI CC (docs/ControlChanges.md).
-   * Example: AMP Gain (knob 0) → CC 24 → `B0 18 <value>`
-   * Value is clamped to 0..100 (device MIDI map range).
-   */
-  public static buildParameterChange(block: BlockType | number, paramId: number, value: number): Uint8Array {
-    const bt: BlockType = typeof block === 'number' ? idToBlockType(block) : block;
-    const cc = paramToCc(bt, paramId);
-    if (cc === null) {
-      throw new Error(`Block ${bt} has no MIDI CC mapping for param ${paramId}`);
-    }
-    const clamped = Math.min(PARAM_CC_MAX, Math.max(0, value | 0));
-    return this.buildControlChange(cc, clamped);
+  private static sceneSet(command: number, preset: number, sceneIndex: number, body: Uint8Array | number[]): Uint8Array {
+    integer(preset, 0, 127, 'Preset'); integer(sceneIndex, 0, 2, 'Scene index');
+    return this.buildSysExPacket(command, 1, [preset, sceneIndex, ...encodedSceneBody(body)]);
   }
-
-  /**
-   * Save current patch edits to hardware preset slot (0x0B)
-   */
-  public static buildSavePatch(preset: number | string): Uint8Array {
-    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : preset & 0x7f;
-    return new Uint8Array([
-      ...NUX_SYSEX_HEADER,
-      SysExCommand.SAVE_PATCH,
-      SysExDirection.HOST_TO_DEVICE,
-      pc,
-      SYSEX_END,
-    ]);
+  /** Saving requires all scene bytes; a preset number alone is not a valid write. */
+  public static buildSavePatch(preset: number | string, sceneIndex?: number, body?: Uint8Array | number[]): Uint8Array {
+    if (sceneIndex === undefined || body === undefined) throw new Error('Saving requires a scene index and complete scene body. Use client.savePatch().');
+    return this.buildSceneDataSet(typeof preset === 'string' ? presetNameToProgramChange(preset) : preset, sceneIndex, body);
   }
-
-  /**
-   * Request signal routing chain / custom MIDI config (0x0F)
-   */
-  public static buildSignalChainRequest(): Uint8Array {
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.SIGNAL_CHAIN_ROUTING, 0x00, SYSEX_END]);
+  public static buildCurrentStateRequest(): Uint8Array { return this.buildSysExPacket(0x15, 0); }
+  public static buildSignalChainRequest(): Uint8Array { return this.buildSysExPacket(0x0d, 0); }
+  public static buildSignalChainSet(order: number[], configuration: number): Uint8Array {
+    if (order.length !== 12 || new Set(order).size !== 12) throw new Error('Signal chain must contain every hardware block exactly once.');
+    order.forEach(id => integer(id, 0, 11, 'Block ID')); integer(configuration, 0, 127, 'Chain configuration');
+    return this.buildSysExPacket(0x0d, 1, [...order, configuration]);
   }
-
-  /**
-   * Request global EQ / USB routing setup (0x14)
-   */
-  public static buildGlobalEqRequest(): Uint8Array {
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.GLOBAL_EQ_SETUP, 0x00, SYSEX_END]);
-  }
-
-  /**
-   * Build connection heartbeat ping (0x0E)
-   */
-  public static buildHeartbeatPing(): Uint8Array {
-    return new Uint8Array([...NUX_SYSEX_HEADER, SysExCommand.HEARTBEAT_PING, 0x00, SYSEX_END]);
-  }
-
-  /**
-   * Request/sync scene bank data (QuickTone).
-   * WARNING: this triggers large SysEx dump replies — not a realtime scene select.
-   * Prefer `buildSceneSelect` (CC 80) to change the active scene.
-   */
+  public static buildGlobalEqRequest(): Uint8Array { return this.buildSysExPacket(0x14, 0); }
+  /** @deprecated Prefer a response-correlated current-state query for connectivity. */
+  public static buildHeartbeatPing(): Uint8Array { return this.buildCurrentStateRequest(); }
   public static buildSceneSelectSysEx(sceneNumber: number): Uint8Array {
-    const sceneVal = Math.min(2, Math.max(0, sceneNumber - 1));
-    return new Uint8Array([
-      ...NUX_SYSEX_HEADER,
-      SysExCommand.SCENE_CURRENT_DATA,
-      0x00,
-      0x00,
-      sceneVal,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      SYSEX_END,
-    ]);
+    integer(sceneNumber, 1, 3, 'Scene'); return this.buildPatchDumpRequest(sceneNumber - 1);
   }
-
-  /**
-   * Select active scene (1, 2, 3) using MIDI CC 80 (0x50).
-   */
-  public static buildSceneSelect(sceneNumber: number, channel: number = 0): Uint8Array {
-    const validScene = Math.min(3, Math.max(1, sceneNumber));
-    const sceneVal = validScene - 1;
-    return this.buildControlChange(CC_MAPPINGS.SCENE_SELECT, sceneVal, channel);
+  public static buildSceneSelect(sceneNumber: number, channel = 0): Uint8Array {
+    integer(sceneNumber, 1, 3, 'Scene'); return this.buildControlChange(CC_MAPPINGS.SCENE_SELECT, sceneNumber - 1, channel);
   }
-
-  public static buildProgramChange(presetIndex: number, channel: number = 0): Uint8Array {
-    const status = 0xc0 | (channel & 0x0f);
-    return new Uint8Array([status, presetIndex & 0x7f]);
+  /** @deprecated Current model is needed to preserve it while toggling. Prefer client.setBlockState(). */
+  public static buildBlockToggle(block: BlockType | number, enabled: boolean): Uint8Array {
+    return this.buildControlChange(blockTypeToId(block), enabled ? 0 : 0x41);
   }
-
-  public static buildControlChange(ccNumber: number, value: number, channel: number = 0): Uint8Array {
-    const status = 0xb0 | (channel & 0x0f);
-    return new Uint8Array([status, ccNumber & 0x7f, value & 0x7f]);
+  /** A standalone 03 model command was erroneous: 03 is tempo. */
+  public static buildModelSelect(_block: BlockType | number, _modelId: number): Uint8Array {
+    throw new Error('Model selection requires scene data. Use client.setModel().');
+  }
+  /** External Custom-MIDI mapping; it can be remapped by the device. */
+  public static buildParameterChange(block: BlockType | number, paramId: number, value: number): Uint8Array {
+    const name = typeof block === 'number' ? idToBlockType(block) : block;
+    integer(paramId, 0, 11, 'Parameter');
+    if (!Number.isFinite(value)) throw new Error('Parameter value must be finite.');
+    const cc = paramToCc(name, paramId);
+    if (cc === null) throw new Error(`Block ${name} has no MIDI CC mapping for param ${paramId}`);
+    return this.buildControlChange(cc, Math.min(100, Math.max(0, Math.trunc(value))));
+  }
+  public static buildProgramChange(preset: number, channel = 0): Uint8Array {
+    integer(preset, 0, 127, 'Preset'); integer(channel, 0, 15, 'MIDI channel');
+    return Uint8Array.from([0xc0 | channel, preset]);
+  }
+  public static buildControlChange(cc: number, value: number, channel = 0): Uint8Array {
+    integer(cc, 0, 127, 'CC'); integer(value, 0, 127, 'CC value'); integer(channel, 0, 15, 'MIDI channel');
+    return Uint8Array.from([0xb0 | channel, cc, value]);
   }
 }

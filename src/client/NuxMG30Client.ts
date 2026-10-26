@@ -3,415 +3,380 @@ import { NodeTransport } from '../transport/NodeTransport.js';
 import { WebMidiTransport } from '../transport/WebMidiTransport.js';
 import { SysExEncoder } from '../protocol/SysExEncoder.js';
 import { SysExDecoder } from '../protocol/SysExDecoder.js';
+import { integer } from '../protocol/validation.js';
 import { PatchDecoder } from '../patch/PatchDecoder.js';
 import { unpackNuxPayload, packNuxPayload } from '../protocol/nuxEncoding.js';
-import {
-  programChangeToPresetName,
-  presetNameToProgramChange,
-  blockTypeToId,
-  idToBlockType,
-  CC_MAPPINGS,
-  DEFAULT_INPUT_PORT_NAME,
-  DEFAULT_OUTPUT_PORT_NAME,
-  PARAM_CC_MAX,
-  sceneModelOffset,
-  sceneKnobOffset,
-  SCENE_MODEL_OFF_BIT,
-} from '../constants.js';
-import { PatchData, PresetInfo, BlockType, SysExCommand, NuxClientEvents } from '../types.js';
+import { programChangeToPresetName, presetNameToProgramChange, blockTypeToId, idToBlockType, CC_MAPPINGS, DEFAULT_INPUT_PORT_NAME, DEFAULT_OUTPUT_PORT_NAME, sceneModelOffset, sceneKnobOffset, SCENE_DUMP_BLOCK_ORDER } from '../constants.js';
+import { PatchData, PresetInfo, BlockType, NuxClientEvents, SysExPacket, DeviceState, DeviceInfo, PresetData, SignalChain } from '../types.js';
 
 export interface NuxClientOptions {
   transport?: BaseTransport;
-  inputPortName?: string;
-  outputPortName?: string;
+  inputPortName?: string | number;
+  outputPortName?: string | number;
   autoHeartbeat?: boolean;
   heartbeatIntervalMs?: number;
+  timeoutMs?: number;
+  synchronizeOnConnect?: boolean;
 }
-
-export interface SceneWriteOptions {
-  /** Reload preset via Program Change so 0C edit buffer matches saved data (default true). */
-  reload?: boolean;
-  /** Settle time after SysEx write before reload/read (ms). */
-  settleMs?: number;
+/** Writes are acknowledged and read back. Editing uses 0C; saving uses 0B. */
+export interface SceneWriteOptions { reload?: boolean; settleMs?: number; }
+interface Pending {
+  match: (message: Uint8Array) => boolean;
+  resolve: (message: Uint8Array) => void;
+  reject: (error: Error) => void;
 }
 
 export class NuxMG30Client {
   private transport: BaseTransport;
-  private inputPortName: string;
-  private outputPortName: string;
-  private autoHeartbeat: boolean;
-  private heartbeatIntervalMs: number;
-  private heartbeatTimer: any = null;
+  private options: NuxClientOptions;
   private activePresetIndex = 0;
-  /** 0-based scene index matching SysEx dumps (0=Scene1 … 2=Scene3). */
   private activeSceneIndex = 0;
-  private patchResolver: ((patch: PatchData) => void) | null = null;
-
+  private stateKnown = false;
+  private pending?: Pending;
+  private queryTail: Promise<void> = Promise.resolve();
+  private operationTail: Promise<void> = Promise.resolve();
+  private generation = 0;
+  private operationGeneration?: number;
+  private queries = 0;
+  private heartbeatTimer?: ReturnType<typeof setInterval>;
   private eventListeners: { [K in keyof NuxClientEvents]?: Function[] } = {};
 
   constructor(options: NuxClientOptions = {}) {
-    if (options.transport) {
-      this.transport = options.transport;
-    } else if (typeof window !== 'undefined' && typeof (navigator as any)?.requestMIDIAccess !== 'undefined') {
-      this.transport = new WebMidiTransport();
-    } else {
-      this.transport = new NodeTransport();
-    }
-
-    this.inputPortName = options.inputPortName || DEFAULT_INPUT_PORT_NAME;
-    this.outputPortName = options.outputPortName || DEFAULT_OUTPUT_PORT_NAME;
-    this.autoHeartbeat = options.autoHeartbeat ?? false;
-    this.heartbeatIntervalMs = options.heartbeatIntervalMs || 5000;
-
+    this.options = options;
+    this.transport = options.transport ?? (typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function' ? new WebMidiTransport() : new NodeTransport());
+    integer(options.timeoutMs ?? 3000, 1, 120000, 'Timeout');
     this.transport.onMessage(this.handleMidiMessage.bind(this));
   }
-
   public async connect(): Promise<void> {
-    await this.transport.connect(this.inputPortName, this.outputPortName);
-    this.emit('connected', { inputPort: this.inputPortName, outputPort: this.outputPortName });
-
-    if (this.autoHeartbeat) {
-      this.startHeartbeatTimer();
+    try {
+      await this.transport.connect(this.options.inputPortName ?? DEFAULT_INPUT_PORT_NAME, this.options.outputPortName ?? DEFAULT_OUTPUT_PORT_NAME);
+      if (this.options.synchronizeOnConnect !== false) await this.synchronize();
+      this.emit('connected', { inputPort: String(this.options.inputPortName ?? DEFAULT_INPUT_PORT_NAME), outputPort: String(this.options.outputPortName ?? DEFAULT_OUTPUT_PORT_NAME) });
+      if (this.options.autoHeartbeat) {
+        this.heartbeatTimer = setInterval(() => {
+          if (!this.queries) void this.ping().catch(error => this.emit('error', error));
+        }, this.options.heartbeatIntervalMs ?? 5000);
+      }
+    } catch (error) {
+      await this.disconnect().catch(() => {});
+      throw error;
     }
   }
-
   public async disconnect(): Promise<void> {
-    this.stopHeartbeatTimer();
+    this.generation++;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+    this.pending?.reject(new Error('NUX MIDI connection disconnected.'));
+    this.stateKnown = false;
     await this.transport.disconnect();
     this.emit('disconnected');
   }
-
+  private send(message: Uint8Array): void {
+    this.transport.send(message);
+    this.emit('midiSent', Uint8Array.from(message));
+  }
+  /** One in-flight exchange: MG-30 has no transaction identifiers. */
+  private request(message: Uint8Array, match: Pending['match'], timeout = this.options.timeoutMs ?? 3000): Promise<Uint8Array> {
+    integer(timeout, 1, 120000, 'Timeout');
+    if (this.operationGeneration !== undefined && this.operationGeneration !== this.generation) return Promise.reject(new Error('NUX operation cancelled by disconnect.'));
+    const generation = this.generation;
+    this.queries++;
+    const result = this.queryTail.then(() => {
+      if (generation !== this.generation) throw new Error('NUX request cancelled by disconnect.');
+      return new Promise<Uint8Array>((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timer); if (this.pending === pending) this.pending = undefined; };
+        const pending: Pending = {
+          match,
+          resolve: bytes => { cleanup(); resolve(bytes); },
+          reject: error => { cleanup(); reject(error); },
+        };
+        const timer = setTimeout(() => pending.reject(new Error(`Timed out waiting for NUX response to command 0x${message[4]?.toString(16)} after ${timeout}ms.`)), timeout);
+        this.pending = pending;
+        try { this.send(message); } catch (error) { pending.reject(error instanceof Error ? error : new Error(String(error))); }
+      });
+    }).finally(() => { this.queries--; });
+    this.queryTail = result.then(() => {}, () => {});
+    return result;
+  }
+  private transaction<T>(action: () => Promise<T>): Promise<T> {
+    const generation = this.generation;
+    const result = this.operationTail.then(() => {
+      if (generation !== this.generation) throw new Error('NUX operation cancelled by disconnect.');
+      this.operationGeneration = generation;
+      return action().finally(() => { this.operationGeneration = undefined; });
+    });
+    this.operationTail = result.then(() => {}, () => {});
+    return result;
+  }
+  private async exchange(message: Uint8Array, match: (packet: SysExPacket) => boolean, timeout?: number): Promise<SysExPacket> {
+    const bytes = await this.request(message, bytes => {
+      const packet = SysExDecoder.parseSysEx(bytes);
+      return packet !== null && match(packet);
+    }, timeout);
+    return SysExDecoder.parseSysEx(bytes)!;
+  }
+  public async synchronize(timeoutMs?: number): Promise<DeviceState> {
+    const packet = await this.exchange(SysExEncoder.buildCurrentStateRequest(), p => p.command === 0x15 && p.direction === 2 && p.payload.length >= 5 && p.payload[0] < 128 && p.payload[3] < 3, timeoutMs);
+    this.activePresetIndex = packet.payload[0]; this.activeSceneIndex = packet.payload[3]; this.stateKnown = true;
+    return { preset: this.activePresetIndex, sceneIndex: this.activeSceneIndex, raw: packet.payload.slice() };
+  }
+  public async ping(timeoutMs?: number): Promise<number> {
+    const start = Date.now(); await this.synchronize(timeoutMs); this.emit('heartbeat'); return Date.now() - start;
+  }
+  public sendHeartbeat(): Promise<number> { return this.ping(); }
+  public getActivePresetIndex(): number { return this.activePresetIndex; }
+  public getActiveSceneIndex(): number { return this.activeSceneIndex; }
+  public getActivePresetInfo(): PresetInfo { return { index: this.activePresetIndex, ...programChangeToPresetName(this.activePresetIndex) }; }
+  private presetNumber(preset: number | string): number {
+    return typeof preset === 'string' ? presetNameToProgramChange(preset) : integer(preset, 0, 127, 'Preset');
+  }
   public setPreset(preset: number | string): void {
-    let pc: number;
-    if (typeof preset === 'string') {
-      pc = presetNameToProgramChange(preset);
-    } else {
-      pc = preset & 0x7f;
-    }
-
-    this.activePresetIndex = pc;
-    this.transport.send(SysExEncoder.buildProgramChange(pc));
-
-    const presetInfo: PresetInfo = {
-      index: pc,
-      ...programChangeToPresetName(pc),
-    };
-    this.emit('presetChanged', presetInfo);
+    const pc = this.presetNumber(preset);
+    this.send(SysExEncoder.buildProgramChange(pc));
+    this.activePresetIndex = pc; this.stateKnown = true;
+    this.emit('presetChanged', this.getActivePresetInfo());
   }
-
-  public getActivePresetIndex(): number {
-    return this.activePresetIndex;
+  public async loadPreset(preset: number | string): Promise<DeviceState> {
+    const pc = this.presetNumber(preset);
+    this.setPreset(pc);
+    const state = await this.synchronize();
+    if (state.preset !== pc) throw new Error(`Preset change was not confirmed (requested ${pc}, device reports ${state.preset}).`);
+    return state;
   }
-
-  public getActivePresetInfo(): PresetInfo {
-    return {
-      index: this.activePresetIndex,
-      ...programChangeToPresetName(this.activePresetIndex),
-    };
+  public presetUp(step = 1): PresetInfo {
+    integer(step, 0, Number.MAX_SAFE_INTEGER, 'Step'); this.setPreset((this.activePresetIndex + step % 128) % 128); return this.getActivePresetInfo();
   }
-
-  public presetUp(step: number = 1): PresetInfo {
-    const nextPc = (this.activePresetIndex + step + 128 * Math.ceil(Math.abs(step))) % 128;
-    this.setPreset(nextPc);
-    return this.getActivePresetInfo();
+  public presetDown(step = 1): PresetInfo {
+    integer(step, 0, Number.MAX_SAFE_INTEGER, 'Step'); this.setPreset((this.activePresetIndex - step % 128 + 128) % 128); return this.getActivePresetInfo();
   }
-
-  public presetDown(step: number = 1): PresetInfo {
-    const prevPc = (this.activePresetIndex - step + 128 * Math.ceil(Math.abs(step))) % 128;
-    this.setPreset(prevPc);
-    return this.getActivePresetInfo();
-  }
-
-  /**
-   * Selects scene 1/2/3 via MIDI CC 80 and tracks which scene `0C` dumps request.
-   */
   public selectScene(scene: number): void {
-    const validScene = Math.min(3, Math.max(1, scene));
-    this.activeSceneIndex = validScene - 1;
-    this.transport.send(SysExEncoder.buildSceneSelect(validScene));
-    this.emit('sceneChanged', { scene: validScene });
+    integer(scene, 1, 3, 'Scene'); this.send(SysExEncoder.buildSceneSelect(scene)); this.activeSceneIndex = scene - 1; this.emit('sceneChanged', { scene });
   }
-
-  /**
-   * Toggle block ON/OFF by rewriting scene SysEx (`0B`).
-   */
-  public async setBlockState(
-    block: BlockType | number,
-    enabled: boolean,
-    options: SceneWriteOptions = {}
-  ): Promise<void> {
-    const blockName = idToBlockType(blockTypeToId(block));
-    await this.modifyActiveScene((decoded) => {
-      const idx = sceneModelOffset(blockName);
-      const modelId = decoded[idx] & 0x3f;
-      decoded[idx] = enabled ? modelId : modelId | SCENE_MODEL_OFF_BIT;
-    }, options);
-    this.emit('blockToggled', { block: blockName, enabled });
+  public async selectSceneVerified(scene: number): Promise<void> {
+    integer(scene, 1, 3, 'Scene');
+    if (!this.stateKnown) await this.synchronize();
+    const mapping = await this.exchange(SysExEncoder.buildSysExPacket(0x0f, 0), p => p.command === 0x0f && p.direction === 2 && p.payload.length >= 86);
+    this.send(SysExEncoder.buildControlChange(mapping.payload[80], scene - 1));
+    const state = await this.synchronize();
+    if (state.sceneIndex !== scene - 1) throw new Error(`Scene ${scene} was not confirmed by the device.`);
   }
-
-  /**
-   * Select block model by rewriting scene SysEx (`0B`).
-   * Note: SysEx `0x03` is tempo in protocol.md — not model select.
-   */
-  public async setModel(
-    block: BlockType | number,
-    modelId: number,
-    options: SceneWriteOptions = {}
-  ): Promise<void> {
-    const blockName = idToBlockType(blockTypeToId(block));
-    await this.modifyActiveScene((decoded) => {
-      const idx = sceneModelOffset(blockName);
-      const off = decoded[idx] & SCENE_MODEL_OFF_BIT;
-      decoded[idx] = off | (modelId & 0x3f);
-    }, options);
-    this.emit('modelChanged', { block: blockName, modelId });
+  public async requestPatchDump(timeoutMs = this.options.timeoutMs ?? 3000, sceneIndex = this.activeSceneIndex): Promise<PatchData> {
+    integer(sceneIndex, 0, 2, 'Scene index');
+    const preset = this.stateKnown ? this.activePresetIndex : undefined;
+    const packet = await this.exchange(SysExEncoder.buildPatchDumpRequest(sceneIndex), p =>
+      p.command === 0x0c && p.direction === 2 && p.payload.length === 215 && p.payload[1] === sceneIndex && (preset === undefined || p.payload[0] === preset), timeoutMs);
+    const patch = PatchDecoder.decode(packet.payload);
+    this.activePresetIndex = packet.payload[0]; this.stateKnown = true;
+    return patch;
   }
-
-  /**
-   * Set a knob by rewriting scene SysEx (`0B`). Also emits Custom-MIDI CC best-effort.
-   * Range: 0..100.
-   */
-  public async setParameter(
-    block: BlockType | number,
-    paramId: number,
-    value: number,
-    options: SceneWriteOptions = {}
-  ): Promise<void> {
-    const blockName = idToBlockType(blockTypeToId(block));
-    const clamped = Math.min(PARAM_CC_MAX, Math.max(0, value | 0));
-
-    try {
-      this.transport.send(SysExEncoder.buildParameterChange(blockName, paramId, clamped));
-    } catch {
-      // Blocks without CC mapping (e.g. CAB) skip the CC path.
+  public async requestSavedScene(preset: number | string, sceneIndex: number, timeoutMs?: number): Promise<PatchData> {
+    const pc = this.presetNumber(preset); integer(sceneIndex, 0, 2, 'Scene index');
+    const packet = await this.exchange(SysExEncoder.buildSavedSceneRequest(pc, sceneIndex), p =>
+      p.command === 0x0b && p.direction === 2 && p.payload.length === 215 && p.payload[0] === pc && p.payload[1] === sceneIndex, timeoutMs);
+    return PatchDecoder.decode(packet.payload);
+  }
+  public async readPreset(preset: number | string = this.activePresetIndex, source: 'saved' | 'current' = 'saved'): Promise<PresetData> {
+    const pc = this.presetNumber(preset);
+    if (source === 'current' && pc !== this.activePresetIndex) throw new Error('Only the active preset has an edit buffer.');
+    const scenes: PatchData[] = [];
+    for (let i = 0; i < 3; i++) scenes.push(source === 'saved' ? await this.requestSavedScene(pc, i) : await this.requestPatchDump(undefined, i));
+    return { index: pc, scenes: scenes as PresetData['scenes'] };
+  }
+  private body(patch: PatchData): Uint8Array {
+    const raw = patch.raw;
+    PatchDecoder.decode(raw);
+    const body = raw.length === 215 ? unpackNuxPayload(raw.subarray(2)) : Uint8Array.from(raw);
+    if (body.length !== 142) throw new Error('Invalid MG-30 scene body length.');
+    PatchDecoder.decode(body);
+    return body;
+  }
+  private validatePreset(data: PresetData): void {
+    integer(data.index, 0, 127, 'Preset');
+    if (!Array.isArray(data.scenes) || data.scenes.length !== 3) throw new Error('A preset must contain all three scenes.');
+    data.scenes.forEach((scene, index) => { if (scene.scene !== index + 1) throw new Error('Preset scenes must be ordered 1, 2, 3.'); this.body(scene); });
+  }
+  private async writeScene(pc: number, scene: number, body: Uint8Array, saved: boolean): Promise<PatchData> {
+    PatchDecoder.decode(body);
+    const encoded = packNuxPayload(body); const command = saved ? 0x0b : 0x0c;
+    const frame = saved ? SysExEncoder.buildSceneDataSet(pc, scene, encoded) : SysExEncoder.buildCurrentSceneDataSet(pc, scene, encoded);
+    await this.exchange(frame, p => p.command === command && p.direction === 3);
+    const result = saved ? await this.requestSavedScene(pc, scene) : await this.requestPatchDump(undefined, scene);
+    if (!this.equal(this.body(result), body)) throw new Error(`Scene ${scene + 1} in preset ${programChangeToPresetName(pc).name} failed write verification.`);
+    return result;
+  }
+  private equal(a: Uint8Array, b: Uint8Array): boolean { return a.length === b.length && a.every((v, i) => v === b[i]); }
+  public async writePreset(data: PresetData, destination: number | string = data.index): Promise<void> {
+    this.validatePreset(data); const pc = this.presetNumber(destination);
+    const snapshot: PresetData = { index: data.index, scenes: data.scenes.map(patch => PatchDecoder.decode(Uint8Array.from([data.index, patch.scene - 1, ...packNuxPayload(this.body(patch))]))) as PresetData['scenes'] };
+    return this.transaction(() => this.writePresetInternal(snapshot, pc));
+  }
+  private async writePresetInternal(data: PresetData, pc: number): Promise<void> {
+    for (let i = 0; i < 3; i++) {
+      try { await this.writeScene(pc, i, this.body(data.scenes[i]), true); }
+      catch (error) { throw new Error(`Write stopped at ${programChangeToPresetName(pc).name}, scene ${i + 1}; earlier scenes may already be saved. ${String(error)}`); }
     }
-
-    await this.modifyActiveScene((decoded) => {
-      decoded[sceneKnobOffset(blockName, paramId)] = clamped;
-    }, options);
-
-    this.emit('paramChanged', { block: blockName, paramId, value: clamped });
+    this.emit('patchSaved', { presetName: programChangeToPresetName(pc).name, index: pc });
   }
-
-  public savePatch(preset: number | string = this.activePresetIndex): void {
-    const pc = typeof preset === 'string' ? presetNameToProgramChange(preset) : preset & 0x7f;
-    const presetInfo = programChangeToPresetName(pc);
-    this.transport.send(SysExEncoder.buildSavePatch(pc));
-    this.emit('patchSaved', { presetName: presetInfo.name, index: pc });
-  }
-
-  /**
-   * Set user patch name by modifying offsets 106..121 in the decoded scene dump.
-   */
-  public async setPresetName(
-    name: string,
-    options: SceneWriteOptions = {}
-  ): Promise<void> {
-    const cleanName = name.slice(0, 16);
-    await this.modifyActiveScene((decoded) => {
-      for (let i = 0; i < 16; i++) {
-        if (106 + i < decoded.length) {
-          decoded[106 + i] = i < cleanName.length ? cleanName.charCodeAt(i) : 0;
-        }
-      }
-    }, options);
-  }
-
-  public async clearPreset(preset?: number | string, options: { keepAmpCab?: boolean } = {}): Promise<void> {
-    if (preset !== undefined) {
-      this.setPreset(preset);
-      await this.sleep(800);
-    }
-
-    const blocksToDisable: BlockType[] = ['WAH', 'CMP', 'EFX', 'EQ', 'NG', 'MOD', 'DLY', 'RVB'];
-    for (const block of blocksToDisable) {
-      await this.setBlockState(block, false, { reload: false });
-      await this.sleep(200);
-    }
-
-    if (!options.keepAmpCab) {
-      await this.setModel('AMP', 1, { reload: false });
-      await this.setBlockState('AMP', true, { reload: false });
-    }
-
-    this.setPreset(preset !== undefined ? preset : this.activePresetIndex);
-    await this.sleep(500);
-    this.savePatch(preset !== undefined ? preset : this.activePresetIndex);
-    await this.sleep(800);
-  }
-
-  /**
-   * Request scene dump for the active (or given 0-based) scene.
-   */
-  public async requestPatchDump(
-    timeoutMs: number = 3000,
-    sceneIndex: number = this.activeSceneIndex
-  ): Promise<PatchData> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.patchResolver = null;
-        reject(new Error(`Timed out waiting for NUX MG-30 patch dump response after ${timeoutMs}ms.`));
-      }, timeoutMs);
-
-      this.patchResolver = (patch: PatchData) => {
-        clearTimeout(timer);
-        resolve(patch);
-      };
-
-      this.transport.send(SysExEncoder.buildPatchDumpRequest(sceneIndex));
+  public async savePatch(preset?: number | string): Promise<void> {
+    if (preset !== undefined) this.presetNumber(preset);
+    return this.transaction(async () => {
+      if (!this.stateKnown) await this.synchronize();
+      const current = await this.readPreset(this.activePresetIndex, 'current');
+      await this.writePresetInternal(current, preset === undefined ? this.activePresetIndex : this.presetNumber(preset));
     });
   }
-
-  /**
-   * Read-modify-write active preset/scene via SysEx `0B`, then optionally reload PC.
-   */
-  public async modifyActiveScene(
-    mutator: (decoded: Uint8Array, meta: { preset: number; sceneIndex: number }) => void,
-    options: SceneWriteOptions = {}
-  ): Promise<void> {
-    const settleMs = options.settleMs ?? 350;
-    const reload = options.reload ?? true;
-
-    const patch = await this.requestPatchDump(2500);
-    if (!patch.raw || patch.raw.length < 12) {
-      throw new Error('Scene dump too short to modify.');
-    }
-
-    const preset = patch.raw[0] & 0x7f;
-    const sceneIndex = Math.min(2, Math.max(0, patch.raw[1] & 0x7f));
-    this.activePresetIndex = preset;
-    this.activeSceneIndex = sceneIndex;
-
-    const decoded = unpackNuxPayload(patch.raw.subarray(2));
-    if (decoded.length < 90) {
-      throw new Error('Unpacked scene body too short to modify.');
-    }
-
-    mutator(decoded, { preset, sceneIndex });
-
-    this.transport.send(SysExEncoder.buildSceneDataSet(preset, sceneIndex, packNuxPayload(decoded)));
-    await this.sleep(settleMs);
-
-    if (reload) {
-      this.setPreset(preset);
-      await this.sleep(Math.max(400, settleMs));
-    }
+  public async clonePreset(source: number | string, destination: number | string): Promise<void> {
+    const src = this.presetNumber(source), dest = this.presetNumber(destination);
+    if (src === dest) throw new Error('Source and destination preset must differ.');
+    return this.transaction(async () => this.writePresetInternal(await this.readPreset(src), dest));
   }
-
-  public sendHeartbeat(): void {
-    this.transport.send(SysExEncoder.buildHeartbeatPing());
+  public async modifyActiveScene(mutator: (decoded: Uint8Array, meta: { preset: number; sceneIndex: number }) => void, options: SceneWriteOptions = {}): Promise<void> {
+    return this.transaction(async () => {
+      await this.synchronize();
+      const pc = this.activePresetIndex, scene = this.activeSceneIndex;
+      const patch = await this.requestPatchDump(undefined, scene), body = this.body(patch);
+      mutator(body, { preset: pc, sceneIndex: scene });
+      if (this.activePresetIndex !== pc || this.activeSceneIndex !== scene) throw new Error('Active preset or scene changed during editing; retry the operation.');
+      await this.writeScene(pc, scene, body, false);
+      if (options.settleMs) await this.sleep(integer(options.settleMs, 0, 10000, 'Settle time'));
+      // `reload` remains accepted for API compatibility. Editing never reloads or persists.
+    });
   }
-
-  public sendCC(ccNumber: number, value: number): void {
-    this.transport.send(SysExEncoder.buildControlChange(ccNumber, value));
+  public async setBlockState(block: BlockType | number, enabled: boolean, options: SceneWriteOptions = {}): Promise<void> {
+    const name = idToBlockType(blockTypeToId(block)), offset = sceneModelOffset(name);
+    await this.modifyActiveScene(body => { body[offset] = (body[offset] & 0x3f) | (enabled ? 0 : 0x40); }, options);
+    this.emit('blockToggled', { block: name, enabled });
   }
-
-  public listInputPorts() {
-    return this.transport.listInputPorts();
+  public async setModel(block: BlockType | number, modelId: number, options: SceneWriteOptions = {}): Promise<void> {
+    const name = idToBlockType(blockTypeToId(block)), offset = sceneModelOffset(name); integer(modelId, 0, 63, 'Model');
+    await this.modifyActiveScene(body => { body[offset] = (body[offset] & 0x40) | modelId; }, options);
+    this.emit('modelChanged', { block: name, modelId });
   }
-
-  public listOutputPorts() {
-    return this.transport.listOutputPorts();
+  public async setParameter(block: BlockType | number, paramId: number, value: number, options: SceneWriteOptions = {}): Promise<void> {
+    const name = idToBlockType(blockTypeToId(block)), offset = sceneKnobOffset(name, paramId); integer(value, 0, 100, 'Parameter value');
+    await this.modifyActiveScene(body => { body[offset] = value; }, options);
+    this.emit('paramChanged', { block: name, paramId, value });
   }
-
-  public on<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
-    if (!this.eventListeners[event]) {
-      this.eventListeners[event] = [];
-    }
-    this.eventListeners[event]!.push(listener as Function);
-    return this;
+  public async setParameterByte(block: BlockType | number, paramId: number, value: number): Promise<void> {
+    const name = idToBlockType(blockTypeToId(block)), offset = sceneKnobOffset(name, paramId); integer(value, 0, 255, 'Raw parameter byte');
+    await this.modifyActiveScene(body => { body[offset] = value; });
+    this.emit('paramChanged', { block: name, paramId, value });
   }
-
-  public off<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
-    if (this.eventListeners[event]) {
-      this.eventListeners[event] = this.eventListeners[event]!.filter((l) => l !== listener);
-    }
-    return this;
+  public async setTempo(bpm: number): Promise<void> {
+    integer(bpm, 40, 240, 'Tempo'); await this.modifyActiveScene(body => { body[91] = bpm >> 7; body[92] = bpm & 127; });
   }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private emit<K extends keyof NuxClientEvents>(event: K, ...args: Parameters<NuxClientEvents[K]>): void {
-    const listeners = this.eventListeners[event];
-    if (listeners) {
-      for (const listener of listeners) {
-        try {
-          listener(...args);
-        } catch (err) {
-          console.error(`Error in event listener for "${event}":`, err);
-        }
+  public async setPresetName(name: string): Promise<void> {
+    if (!name.length || name.length > 16 || /[^\x20-\x7e]/.test(name)) throw new Error('Preset name must contain 1..16 printable ASCII characters.');
+    return this.transaction(async () => {
+      if (!this.stateKnown) await this.synchronize();
+      const snapshot = await this.readPreset(this.activePresetIndex, 'current');
+      for (let i = 0; i < 3; i++) {
+        const body = this.body(snapshot.scenes[i]); body.fill(0, 106, 122);
+        for (let j = 0; j < name.length; j++) body[106 + j] = name.charCodeAt(j);
+        await this.writeScene(snapshot.index, i, body, false);
       }
+    });
+  }
+  public async cloneScene(source: number, destination: number): Promise<void> {
+    integer(source, 1, 3, 'Source scene'); integer(destination, 1, 3, 'Destination scene');
+    if (source === destination) throw new Error('Source and destination scene must differ.');
+    return this.transaction(async () => {
+      if (!this.stateKnown) await this.synchronize();
+      const patch = await this.requestPatchDump(undefined, source - 1);
+      await this.writeScene(this.activePresetIndex, destination - 1, this.body(patch), false);
+    });
+  }
+  public async resetScene(scene: number): Promise<void> {
+    integer(scene, 1, 3, 'Scene');
+    return this.transaction(async () => {
+      const patch = await this.requestPatchDump(undefined, scene - 1), body = this.body(patch);
+      for (const block of SCENE_DUMP_BLOCK_ORDER) if (block !== 'VOL') body[sceneModelOffset(block)] |= 0x40;
+      await this.writeScene(this.activePresetIndex, scene - 1, body, false);
+    });
+  }
+  public async clearPreset(preset?: number | string, options: { keepAmpCab?: boolean } = {}): Promise<void> {
+    if (preset !== undefined) await this.loadPreset(preset);
+    return this.transaction(async () => {
+      const snapshot = await this.readPreset(this.activePresetIndex, 'current');
+      for (const scene of snapshot.scenes) {
+        const body = this.body(scene);
+        for (const block of SCENE_DUMP_BLOCK_ORDER) {
+          if (block === 'VOL' || (options.keepAmpCab && (block === 'AMP' || block === 'IR'))) continue;
+          body[sceneModelOffset(block)] |= 0x40;
+        }
+        scene.raw = Uint8Array.from([snapshot.index, scene.scene - 1, ...packNuxPayload(body)]);
+      }
+      await this.writePresetInternal(snapshot, snapshot.index);
+      await this.loadPreset(snapshot.index);
+    });
+  }
+  public async requestSignalChain(): Promise<SignalChain> {
+    const packet = await this.exchange(SysExEncoder.buildSignalChainRequest(), p => p.command === 0x0d && p.direction === 2 && p.payload.length === 13);
+    const ids = Array.from(packet.payload.slice(0, 12));
+    if (new Set(ids).size !== 12 || ids.some(id => id > 11)) throw new Error('Device returned an invalid signal chain.');
+    return { blocks: ids.map(idToBlockType), configuration: packet.payload[12] };
+  }
+  public async setSignalChain(blocks: BlockType[]): Promise<void> {
+    const ids = blocks.map(blockTypeToId);
+    if (ids.length !== 12 || new Set(ids).size !== 12) throw new Error('Signal chain must contain each of the twelve blocks exactly once.');
+    return this.transaction(async () => {
+      const old = await this.requestSignalChain();
+      await this.exchange(SysExEncoder.buildSignalChainSet(ids, old.configuration), p => p.command === 0x0d && p.direction === 3);
+      const actual = await this.requestSignalChain();
+      if (actual.blocks.some((b, i) => blockTypeToId(b) !== ids[i]) || actual.configuration !== old.configuration) throw new Error('Signal-chain update failed verification.');
+    });
+  }
+  public async requestDeviceInfo(): Promise<DeviceInfo> {
+    const raw = await this.request(Uint8Array.from([0xf0, 0x43, 0x58, 0, 0xf7]), b => b.length === 45 && b[0] === 0xf0 && b[1] === 0x43 && b[2] === 0x58 && b[44] === 0xf7);
+    const text = (bytes: Uint8Array) => Array.from(bytes).filter(b => b !== 0).map(b => String.fromCharCode(b)).join('').trim();
+    const firmware = text(raw.slice(36, 44)), serialNumber = text(raw.slice(4, 36));
+    if (!firmware || /[^\x20-\x7e]/.test(firmware + serialNumber)) throw new Error('Device info response contains an unsupported text encoding.');
+    return { firmware, serialNumber, raw: raw.slice() };
+  }
+  public sendCC(cc: number, value: number): void { this.send(SysExEncoder.buildControlChange(cc, value)); }
+  public listInputPorts() { return this.transport.listInputPorts(); }
+  public listOutputPorts() { return this.transport.listOutputPorts(); }
+  public on<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
+    const listeners: Function[] = this.eventListeners[event] ?? [];
+    listeners.push(listener); this.eventListeners[event] = listeners; return this;
+  }
+  public off<K extends keyof NuxClientEvents>(event: K, listener: NuxClientEvents[K]): this {
+    this.eventListeners[event] = this.eventListeners[event]?.filter(l => l !== listener); return this;
+  }
+  private emit<K extends keyof NuxClientEvents>(event: K, ...args: Parameters<NuxClientEvents[K]>): void {
+    for (const listener of this.eventListeners[event] ?? []) {
+      try { listener(...args); } catch (error) { console.error(`Error in ${event} listener:`, error); }
     }
   }
-
-  private handleMidiMessage(_deltaTime: number, message: Uint8Array): void {
+  private handleMidiMessage(_delta: number, message: Uint8Array): void {
+    this.emit('midiReceived', Uint8Array.from(message));
     const packet = SysExDecoder.parseSysEx(message);
+    if (packet?.command === 0x15 && packet.direction === 2 && packet.payload.length >= 5 && packet.payload[3] <= 2) {
+      this.activePresetIndex = packet.payload[0]; this.activeSceneIndex = packet.payload[3]; this.stateKnown = true;
+    }
+    if (packet?.command === 0x0c && packet.direction === 2 && packet.payload.length === 215) {
+      this.activePresetIndex = packet.payload[0]; this.stateKnown = true;
+    }
+    // Resolve and clear before publishing events; listeners may submit another request.
+    if (this.pending?.match(message)) this.pending.resolve(Uint8Array.from(message));
     if (packet) {
       this.emit('sysex', packet);
-
-      if (
-        packet.command === SysExCommand.SCENE_CURRENT_DATA ||
-        packet.command === SysExCommand.SCENE_SAVED_DATA ||
-        packet.command === SysExCommand.HANDSHAKE_PATCH_DUMP
-      ) {
-        // Ignore short set-ack frames (e.g. 0B 03 …).
-        if (packet.payload.length < 90) {
-          return;
-        }
-        const patch = PatchDecoder.decode(packet.payload);
-        patch.presetName = programChangeToPresetName(this.activePresetIndex).name;
-        if (patch.raw.length >= 2) {
-          this.activeSceneIndex = Math.min(2, Math.max(0, patch.raw[1] & 0x7f));
-        }
-
-        this.emit('patchReceived', patch);
-        if (this.patchResolver) {
-          this.patchResolver(patch);
-          this.patchResolver = null;
-        }
-      } else if (packet.command === SysExCommand.HEARTBEAT_PING) {
-        this.emit('heartbeat');
+      if ((packet.command === 0x0b || packet.command === 0x0c) && packet.direction === 2 && packet.payload.length === 215) {
+        try {
+          const patch = PatchDecoder.decode(packet.payload);
+          patch.presetName = programChangeToPresetName(packet.payload[0]).name;
+          this.emit('patchReceived', patch);
+        } catch (error) { this.emit('error', error instanceof Error ? error : new Error(String(error))); }
       }
       return;
     }
-
     if (SysExDecoder.isProgramChange(message)) {
-      const pc = message[1] & 0x7f;
-      this.activePresetIndex = pc;
-      this.emit('presetChanged', {
-        index: pc,
-        ...programChangeToPresetName(pc),
-      });
-      return;
-    }
-
-    if (SysExDecoder.isControlChange(message)) {
-      const ccNum = message[1] & 0x7f;
-      const ccVal = message[2] & 0x7f;
-      if (ccNum === CC_MAPPINGS.EXPRESSION_PEDAL) {
-        this.emit('expressionPedal', ccVal);
-      } else if (ccNum === CC_MAPPINGS.SCENE_SELECT && ccVal >= 0 && ccVal <= 2) {
-        this.activeSceneIndex = ccVal;
-        this.emit('sceneChanged', { scene: ccVal + 1 });
-      }
+      this.activePresetIndex = message[1]; this.stateKnown = true; this.emit('presetChanged', this.getActivePresetInfo());
+    } else if (SysExDecoder.isControlChange(message)) {
+      if (message[1] === CC_MAPPINGS.SCENE_SELECT && message[2] <= 2) {
+        this.activeSceneIndex = message[2]; this.emit('sceneChanged', { scene: message[2] + 1 });
+      } else if (message[1] === CC_MAPPINGS.EXPRESSION_PEDAL) this.emit('expressionPedal', message[2]);
     }
   }
-
-  private startHeartbeatTimer(): void {
-    this.stopHeartbeatTimer();
-    this.heartbeatTimer = setInterval(() => {
-      if (this.transport.getIsConnected()) {
-        this.sendHeartbeat();
-      }
-    }, this.heartbeatIntervalMs);
-  }
-
-  private stopHeartbeatTimer(): void {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
-  }
+  private sleep(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }
 }

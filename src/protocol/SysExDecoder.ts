@@ -1,46 +1,18 @@
-import { isNuxSysEx } from '../utils/midiUtils.js';
-import { SysExPacket, SysExCommand, SysExDirection } from '../types.js';
+import { SysExPacket } from '../types.js';
 
 export class SysExDecoder {
-  /**
-   * Parses a raw byte array into a structured SysExPacket object or null if not valid NUX SysEx.
-   */
+  /** Parse one complete MIDI message. Transports supply whole messages, not USB packets. */
   public static parseSysEx(bytes: Uint8Array | number[]): SysExPacket | null {
-    if (!isNuxSysEx(bytes)) {
-      return null;
-    }
-    const raw = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    if (raw.length < 6) {
-      return null;
-    }
-    const header = Array.from(raw.subarray(0, 4));
-    const command = raw[4] as SysExCommand;
-    const direction = raw[5] as SysExDirection;
-    const endIdx = raw[raw.length - 1] === 0xF7 ? raw.length - 1 : raw.length;
-    const payload = raw.subarray(6, endIdx);
-
-    return {
-      header,
-      command,
-      direction,
-      payload,
-      raw
-    };
+    if (bytes.length < 7 || bytes[0] !== 0xf0 || bytes[1] !== 0x43 ||
+        bytes[2] !== 0x58 || bytes[3] !== 0x70 || bytes[bytes.length - 1] !== 0xf7 ||
+        Array.from(bytes).slice(1, -1).some(b => !Number.isInteger(b) || b < 0 || b > 127)) return null;
+    const raw = Uint8Array.from(bytes);
+    return { header: Array.from(raw.subarray(0, 4)), command: raw[4], direction: raw[5], payload: raw.slice(6, -1), raw };
   }
-
-  /**
-   * Helper to check if a MIDI message is a Program Change (0xC0..0xCF)
-   */
   public static isProgramChange(bytes: Uint8Array | number[]): boolean {
-    if (bytes.length < 2) return false;
-    return (bytes[0] & 0xF0) === 0xC0;
+    return bytes.length === 2 && (bytes[0] & 0xf0) === 0xc0 && bytes[1] >= 0 && bytes[1] < 128;
   }
-
-  /**
-   * Helper to check if a MIDI message is a Control Change (0xB0..0xBF)
-   */
   public static isControlChange(bytes: Uint8Array | number[]): boolean {
-    if (bytes.length < 3) return false;
-    return (bytes[0] & 0xF0) === 0xB0;
+    return bytes.length === 3 && (bytes[0] & 0xf0) === 0xb0 && bytes[1] >= 0 && bytes[1] < 128 && bytes[2] >= 0 && bytes[2] < 128;
   }
 }

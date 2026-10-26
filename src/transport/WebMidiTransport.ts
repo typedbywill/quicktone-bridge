@@ -7,6 +7,7 @@ export class WebMidiTransport extends BaseTransport {
   private midiAccess: any = null;
   private selectedInput: any = null;
   private selectedOutput: any = null;
+  private stateChangeHandler: any = null;
 
   public async initWebMidi(): Promise<void> {
     if (typeof navigator === 'undefined' || !navigator.requestMIDIAccess) {
@@ -50,30 +51,123 @@ export class WebMidiTransport extends BaseTransport {
     const inputs = Array.from(this.midiAccess.inputs.values());
     const outputs = Array.from(this.midiAccess.outputs.values());
 
-    this.selectedInput = this.findPort(inputs, inputPortIndexOrName);
-    this.selectedOutput = this.findPort(outputs, outputPortIndexOrName);
+    const inputCandidate = this.findPort(inputs, inputPortIndexOrName);
+    const outputCandidate = this.findPort(outputs, outputPortIndexOrName);
 
-    if (!this.selectedInput) {
+    if (!inputCandidate) {
       throw new Error(`WebMIDI Input port matching "${inputPortIndexOrName}" not found.`);
     }
-    if (!this.selectedOutput) {
+    if (!outputCandidate) {
       throw new Error(`WebMIDI Output port matching "${outputPortIndexOrName}" not found.`);
     }
 
-    this.selectedInput.onmidimessage = (event: any) => {
-      this.notifyMessage(event.timeStamp, new Uint8Array(event.data));
-    };
+    let inputOpened = false;
+    let outputOpened = false;
 
-    this.isConnected = true;
+    try {
+      if (typeof inputCandidate.open === 'function') {
+        await inputCandidate.open();
+        inputOpened = true;
+      }
+      if (typeof outputCandidate.open === 'function') {
+        await outputCandidate.open();
+        outputOpened = true;
+      }
+
+      this.selectedInput = inputCandidate;
+      this.selectedOutput = outputCandidate;
+
+      this.selectedInput.onmidimessage = (event: any) => {
+        this.notifyMessage(event.timeStamp, new Uint8Array(event.data));
+      };
+
+      this.stateChangeHandler = (event: any) => {
+        const port = event?.port;
+        if (port && (port === this.selectedInput || port === this.selectedOutput)) {
+          if (port.state === 'disconnected') {
+            this.disconnect().catch(() => {});
+          }
+        }
+      };
+
+      if (typeof this.selectedInput.addEventListener === 'function') {
+        this.selectedInput.addEventListener('statechange', this.stateChangeHandler);
+      } else {
+        this.selectedInput.onstatechange = this.stateChangeHandler;
+      }
+
+      if (typeof this.selectedOutput.addEventListener === 'function') {
+        this.selectedOutput.addEventListener('statechange', this.stateChangeHandler);
+      } else {
+        this.selectedOutput.onstatechange = this.stateChangeHandler;
+      }
+
+      this.isConnected = true;
+    } catch (err) {
+      this.isConnected = false;
+      if (inputCandidate) {
+        inputCandidate.onmidimessage = null;
+        if (inputOpened && typeof inputCandidate.close === 'function') {
+          try {
+            await inputCandidate.close();
+          } catch {}
+        }
+      }
+      if (outputCandidate && outputOpened && typeof outputCandidate.close === 'function') {
+        try {
+          await outputCandidate.close();
+        } catch {}
+      }
+      this.selectedInput = null;
+      this.selectedOutput = null;
+      throw err;
+    }
   }
 
   public async disconnect(): Promise<void> {
-    if (this.selectedInput) {
-      this.selectedInput.onmidimessage = null;
-      this.selectedInput = null;
-    }
+    const input = this.selectedInput;
+    const output = this.selectedOutput;
+    const handler = this.stateChangeHandler;
+
+    this.selectedInput = null;
     this.selectedOutput = null;
+    this.stateChangeHandler = null;
     this.isConnected = false;
+
+    if (input) {
+      input.onmidimessage = null;
+      if (handler) {
+        if (typeof input.removeEventListener === 'function') {
+          try {
+            input.removeEventListener('statechange', handler);
+          } catch {}
+        } else if (input.onstatechange === handler) {
+          input.onstatechange = null;
+        }
+      }
+      if (typeof input.close === 'function') {
+        try {
+          await input.close();
+        } catch {}
+      }
+    }
+
+    if (output) {
+      if (handler) {
+        if (typeof output.removeEventListener === 'function') {
+          try {
+            output.removeEventListener('statechange', handler);
+          } catch {}
+        } else if (output.onstatechange === handler) {
+          output.onstatechange = null;
+        }
+      }
+      if (typeof output.close === 'function') {
+        try {
+          await output.close();
+        } catch {}
+      }
+    }
   }
 
   public send(message: Uint8Array | number[]): void {
@@ -90,4 +184,3 @@ export class WebMidiTransport extends BaseTransport {
     return matchIndex !== -1 ? ports[matchIndex] : null;
   }
 }
-
