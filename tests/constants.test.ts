@@ -106,18 +106,56 @@ describe('Constants & Hardware Block Identity', () => {
     expect(paramToCc('AMP', 1.5)).toBeNull();
   });
 
-  it('NUX_MODEL_CATALOG should map IR to the complete official cabinet catalog', () => {
-    expect(NUX_MODEL_CATALOG.IR.length).toBe(21);
-    expect(NUX_MODEL_CATALOG.IR[0].name).toBe('Jazz 212');
-    expect(NUX_MODEL_CATALOG.IR[20].name).toBe('User IR 1-24');
+  it('uses the exact numbered MG-30 cabinet table and aliases CAB to IR', () => {
+    expect(NUX_MODEL_CATALOG.IR).toHaveLength(24);
+    expect(NUX_MODEL_CATALOG.CAB).toBe(NUX_MODEL_CATALOG.IR);
+    expect(getModelName('IR', 0)).toBe('BYPASS');
+    expect(getModelName('IR', 1)).toBe('JZ120');
+    expect(getModelName('CAB', 6)).toBe('1960');
+    expect(findModel('IR', 'GB412').id).toBe(7);
+    expect(findModel('CAB', 'CANNABIS REX 12').id).toBe(10);
+    expect(getModelName('IR', 23)).toBe('G-J15');
+    expect(() => findModel('IR', 'USER')).toThrow(/não encontrado/);
+    expect(() => findModel('IR', 'COLLECTION')).toThrow(/não encontrado/);
+  });
 
-    expect(getModelName('IR', 0)).toBe('Jazz 212');
-    expect(getModelName('CAB', 0)).toBe('Jazz 212');
+  it('keeps every numbered model in the shipped MG-30 tables, with zero reserved for BYPASS', () => {
+    const counts = { WAH: 5, CMP: 3, NG: 1, EFX: 20, AMP: 38, IR: 23, EQ: 4, SR: 1, VOL: 1, MOD: 15, DLY: 8, RVB: 6 };
+    for (const [block, count] of Object.entries(counts)) {
+      const models = NUX_MODEL_CATALOG[block as keyof typeof NUX_MODEL_CATALOG];
+      expect(models.map(m => m.id)).toEqual(Array.from({ length: count + 1 }, (_, i) => i));
+      expect(models[0].name).toBe('BYPASS');
+    }
+  });
 
-    const modelFound = findModel('IR', 'Black 112');
-    expect(modelFound.id).toBe(1);
-    const cabFound = findModel('CAB', 'Black 112');
-    expect(cabFound.id).toBe(1);
+  it('resolves the actual MG-30 amplifier IDs instead of the former invented catalog', () => {
+    expect(findModel('AMP', 'PLEXI 100').id).toBe(10);
+    expect(findModel('AMP', 'CLASS A15').id).toBe(8);
+    expect(findModel('AMP', 'MATCH').id).toBe(23);
+    expect(findModel('AMP', 'BRIT 2000').id).toBe(24);
+    expect(findModel('AMP', 2).name).toBe('DELXUE RVB');
+    expect(findModel('AMP', 36).name).toBe('DELUXE RVB');
+    expect(getModelName('AMP', 63)).toBe('Model #63');
+  });
+
+  it('preserves duplicate shipped labels and requires a numeric ID to disambiguate them', () => {
+    expect(() => findModel('AMP', 'CLASS A30')).toThrow(/ambíguo/);
+    expect(() => findModel('AMP', 'FIREMAN HBE')).toThrow(/ambíguo/);
+    expect(findModel('AMP', 9).name).toBe('CLASS A30');
+    expect(findModel('AMP', 37).name).toBe('CLASS A30');
+    expect(findModel('AMP', 15).name).toBe('FIREMAN HBE');
+    expect(findModel('AMP', 38).name).toBe('FIREMAN HBE');
+  });
+
+  it('resolves the actual MG-30 effects, modulation, delay and reverb numbering', () => {
+    expect(findModel('EFX', 'RED FUZZ').id).toBe(14);
+    expect(findModel('EFX', 'DISTORTION+').id).toBe(1);
+    expect(findModel('EFX', 'TOUCH WAH').id).toBe(15);
+    expect(findModel('WAH', 'OCTAVE-SHIFT').id).toBe(5);
+    expect(findModel('MOD', 'U-VIBE').id).toBe(10);
+    expect(findModel('DLY', 'DUOTIME').id).toBe(7);
+    expect(findModel('RVB', 'ROOM').id).toBe(1);
+    expect(findModel('EQ', 'ALIGN EQ').id).toBe(2);
   });
 
   it('NUX_BLOCK_PARAM_CATALOG should provide consistent parameter names for IR and CAB', () => {
@@ -143,4 +181,11 @@ describe('Constants & Hardware Block Identity', () => {
     expect(() => presetNameToProgramChange('01E')).toThrow(/Invalid preset format/);
     expect(() => presetNameToProgramChange('invalid')).toThrow(/Invalid preset format/);
   });
+});
+
+it('maps the confirmed Plexi parameter order without swapping output and bias', async () => {
+  const { findBlockParam } = await import('../src/constants.js');
+  expect(findBlockParam('AMP', 'Presence').paramId).toBe(5);
+  expect(findBlockParam('AMP', 'Bias').paramId).toBe(6);
+  expect(findBlockParam('AMP', 'Level').paramId).toBe(7);
 });

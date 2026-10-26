@@ -15,9 +15,15 @@ export class VirtualMG30 extends BaseTransport {
   public autoReply = true;
   public readonly dropCommands = new Set<number>();
   public corruptNextReadback = false;
+  public persistentReadbackCorruption = false;
+  public writeDelayMs = 0;
+  public sceneChangeDelayMs = 0;
   public rejectNextSend = false;
   public chain = Uint8Array.from([...Array.from({ length: 12 }, (_, i) => i), 37]);
   private corruptReadback = false;
+  private hasWrittenScene = false;
+  private stagedScenes = new Map<string, Array<Uint8Array | undefined>>();
+  private delayedChanges = new Set<ReturnType<typeof setTimeout>>();
 
   constructor() {
     super();
@@ -27,7 +33,18 @@ export class VirtualMG30 extends BaseTransport {
   public listInputPorts(): MidiPortInfo[] { return [{ index: 0, name: 'Virtual MG-30' }]; }
   public listOutputPorts(): MidiPortInfo[] { return this.listInputPorts(); }
   public async connect(): Promise<void> { this.isConnected = true; }
-  public async disconnect(): Promise<void> { this.isConnected = false; }
+  public async disconnect(): Promise<void> {
+    this.isConnected = false;
+    for (const timer of this.delayedChanges) clearTimeout(timer);
+    this.delayedChanges.clear();
+    this.stagedScenes.clear();
+  }
+
+  private applyAfter(delayMs: number, change: () => void): void {
+    if (!delayMs) { change(); return; }
+    const timer = setTimeout(() => { this.delayedChanges.delete(timer); change(); }, delayMs);
+    this.delayedChanges.add(timer);
+  }
 
   public savedScenes(preset: number): Uint8Array[] {
     if (!this.saved.has(preset)) {
@@ -59,14 +76,16 @@ export class VirtualMG30 extends BaseTransport {
       return;
     }
     if ((bytes[0] & 0xf0) === 0xb0) {
-      if (bytes[1] === this.sceneCc && bytes[2] <= 2) this.sceneIndex = bytes[2];
+      if (bytes[1] === this.sceneCc && bytes[2] <= 2) {
+        this.applyAfter(this.sceneChangeDelayMs, () => { this.sceneIndex = bytes[2]; });
+      }
       return;
     }
     if (bytes.length === 5 && bytes[3] === 0 && bytes[4] === 0xf7) {
       const reply = new Uint8Array(45);
       reply.set([0xf0, 0x43, 0x58, 0]); reply[44] = 0xf7;
-      reply.set(Array.from('VirtualSerial', char => char.charCodeAt(0)), 4);
-      reply.set(Array.from('5.0.1', char => char.charCodeAt(0)), 36);
+      reply.set(Array.from('v6.0.5', char => char.charCodeAt(0)), 4);
+      reply.set(Array.from('MG-30', char => char.charCodeAt(0)), 36);
       this.inject(reply); return;
     }
     const command = bytes[4], operation = bytes[5];
@@ -81,23 +100,35 @@ export class VirtualMG30 extends BaseTransport {
       const pc = command === 0x0b ? bytes[6] : this.preset;
       const scene = bytes[7];
       let body = (command === 0x0b ? this.savedScenes(pc)[scene] : this.current[scene]).slice();
-      if (this.corruptReadback) { this.corruptReadback = false; body[28] ^= 1; }
+      if (this.corruptReadback || (this.persistentReadbackCorruption && this.hasWrittenScene)) {
+        this.corruptReadback = false; body[28] ^= 1;
+      }
       this.inject(frame(command, 2, [pc, scene, ...packBody(body)]));
     } else if ((command === 0x0b || command === 0x0c) && operation === 1) {
       if (bytes.length !== 222) throw new Error('Virtual device requires a 222-byte scene set.');
       const pc = bytes[6], scene = bytes[7], body = unpackBody(bytes.slice(8, -1));
-      if (command === 0x0b) this.savedScenes(pc)[scene] = body;
-      else {
-        if (pc !== this.preset) throw new Error('Current scene write targets a nonactive preset.');
-        this.current[scene] = body;
+      if (command === 0x0c && pc !== this.preset) throw new Error('Current scene write targets a nonactive preset.');
+      // Native sender stages 0, 1, 2. ACK only accepts a frame; scene 2 commits the complete batch.
+      const key = `${command}:${pc}`;
+      if (scene === 0 || !this.stagedScenes.has(key)) this.stagedScenes.set(key, [undefined, undefined, undefined]);
+      const staged = this.stagedScenes.get(key)!;
+      staged[scene] = body;
+      if (scene === 2 && staged.every(sceneBody => sceneBody !== undefined)) {
+        const complete = staged.map(sceneBody => sceneBody!.slice());
+        this.stagedScenes.delete(key);
+        this.applyAfter(this.writeDelayMs, () => {
+          if (command === 0x0b) this.saved.set(pc, complete);
+          else this.current = complete;
+          this.hasWrittenScene = true;
+        });
+        if (this.corruptNextReadback) { this.corruptNextReadback = false; this.corruptReadback = true; }
       }
-      if (this.corruptNextReadback) { this.corruptNextReadback = false; this.corruptReadback = true; }
       this.inject(frame(command, 3, []));
     } else if (command === 0x0d && operation === 0) {
       this.inject(frame(command, 2, this.chain));
     } else if (command === 0x0d && operation === 1) {
       this.chain = bytes.slice(6, -1);
-      this.inject(frame(command, 3, []));
+      this.inject(frame(command, 2, this.chain));
     }
   }
 }

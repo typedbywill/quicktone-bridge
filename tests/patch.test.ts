@@ -84,7 +84,7 @@ describe('PatchDecoder Structural Decoding', () => {
     // Hardware blocks
     expect(patch.blocks.AMP.enabled).toBe(true);
     expect(patch.blocks.AMP.modelId).toBe(2);
-    expect(patch.blocks.AMP.modelName).toBe('Bass Mate');
+    expect(patch.blocks.AMP.modelName).toBe('DELXUE RVB');
     expect(patch.blocks.AMP.params[0]).toBe(0x0e); // Gain
     expect(patch.blocks.AMP.params[1]).toBe(0x41); // Master
 

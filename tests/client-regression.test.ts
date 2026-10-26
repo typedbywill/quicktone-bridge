@@ -36,7 +36,7 @@ describe('MG-30 verified client against a stateful virtual device', () => {
     expect(transport.current[0]).toEqual(oldCurrent[0]);
     expect(transport.current[1]).toEqual(oldCurrent[1]);
     expect(transport.savedScenes(17)).toEqual(saved);
-    expect(sceneSets(transport, 0x0c)).toHaveLength(1);
+    expect(sceneSets(transport, 0x0c)).toHaveLength(3);
     expect(sceneSets(transport, 0x0b)).toHaveLength(0);
     expect(programChanges(transport)).toHaveLength(0);
     expect(transport.sent.filter(bytes => (bytes[0] & 0xf0) === 0xb0)).toHaveLength(0);
@@ -62,7 +62,20 @@ describe('MG-30 verified client against a stateful virtual device', () => {
     await Promise.all([client.setParameter('AMP', 0, 83), client.setParameter('AMP', 1, 74)]);
     expect(transport.current[2][28]).toBe(83);
     expect(transport.current[2][29]).toBe(74);
-    expect(sceneSets(transport, 0x0c)).toHaveLength(2);
+    expect(sceneSets(transport, 0x0c)).toHaveLength(6);
+    await client.disconnect();
+  });
+
+  it.each([0x0b, 0x0c])('stages every scene before the first verification GET for command %i', async command => {
+    const { client, transport } = await connected();
+    if (command === 0x0b) await client.savePatch(31);
+    else await client.setParameter('AMP', 0, 83);
+    const messages = transport.sent.filter(bytes => bytes[0] === 0xf0 && bytes[4] === command);
+    const firstSet = messages.findIndex(bytes => bytes[5] === 1);
+    expect(firstSet).toBeGreaterThanOrEqual(0);
+    expect(messages.slice(firstSet, firstSet + 3).map(bytes => [bytes[5], bytes[7]])).toEqual([[1, 0], [1, 1], [1, 2]]);
+    expect(messages[firstSet + 3][5]).toBe(0);
+    expect(messages.slice(firstSet + 3).map(bytes => bytes[7])).toEqual([0, 1, 2]);
     await client.disconnect();
   });
 
@@ -134,20 +147,61 @@ describe('MG-30 verified client against a stateful virtual device', () => {
     await client.disconnect();
   });
 
-  it('rejects a scene write whose acknowledged bytes do not match readback', async () => {
+  it('waits for a scene selection when the first state responses still report the old scene', async () => {
+    const { client, transport } = await connected({ timeoutMs: 250 });
+    transport.sceneChangeDelayMs = 30;
+    const reportedScenes: number[] = [];
+    client.on('midiReceived', bytes => {
+      if (bytes[4] === 0x15 && bytes[5] === 2) reportedScenes.push(bytes[9]);
+    });
+    await client.selectSceneVerified(2);
+    expect(reportedScenes[0]).toBe(2);
+    expect(reportedScenes.at(-1)).toBe(1);
+    expect(client.getActiveSceneIndex()).toBe(1);
+    await client.disconnect();
+  });
+
+  it('waits for an acknowledged edit to become visible instead of failing on stale readback', async () => {
+    const { client, transport } = await connected({ timeoutMs: 250 });
+    transport.writeDelayMs = 30;
+    const oldValue = transport.current[2][28];
+    const readValues: number[] = [];
+    client.on('patchReceived', patch => { if (patch.scene === 3) readValues.push(patch.blocks.AMP.params[0]); });
+    await client.setParameter('AMP', 0, 83);
+    // Initial RMW read, then at least one stale post-ACK read, then the committed value.
+    expect(readValues.slice(0, 2)).toEqual([oldValue, oldValue]);
+    expect(readValues.at(-1)).toBe(83);
+    expect(transport.current[2][28]).toBe(83);
+    expect(sceneSets(transport, 0x0c)).toHaveLength(3);
+    expect(sceneSets(transport, 0x0b)).toHaveLength(0);
+    await client.disconnect();
+  });
+
+  it('recovers after one transient corrupted readback without repeating the write', async () => {
     const { client, transport } = await connected();
     transport.corruptNextReadback = true;
+    const changed = vi.fn(); client.on('paramChanged', changed);
+    await client.setParameter('AMP', 0, 83);
+    expect(transport.current[2][28]).toBe(83);
+    expect(sceneSets(transport, 0x0c)).toHaveLength(3);
+    expect(changed).toHaveBeenCalledOnce();
+    await client.disconnect();
+  });
+
+  it('rejects a scene write whose acknowledged bytes do not match readback', async () => {
+    const { client, transport } = await connected();
+    transport.persistentReadbackCorruption = true;
     const changed = vi.fn(); client.on('paramChanged', changed);
     await expect(client.setParameter('AMP', 0, 83)).rejects.toThrow(/verification/i);
     expect(changed).not.toHaveBeenCalled();
     await client.disconnect();
   });
 
-  it('stops a multi-scene save at the first failed verification and reports partial persistence', async () => {
+  it('reports potentially persisted data when bulk save fails verification', async () => {
     const { client, transport } = await connected();
-    transport.corruptNextReadback = true;
+    transport.persistentReadbackCorruption = true;
     await expect(client.savePatch(31)).rejects.toThrow(/scene 1.*earlier scenes may already be saved/i);
-    expect(sceneSets(transport, 0x0b)).toHaveLength(1);
+    expect(sceneSets(transport, 0x0b)).toHaveLength(3);
     await client.disconnect();
   });
 
@@ -227,8 +281,9 @@ describe('Device information and write failures', () => {
   it('queries firmware using the distinct five-byte handshake and fixed response offsets', async () => {
     const { client, transport } = await connected();
     const info = await client.requestDeviceInfo();
-    expect(info.serialNumber).toBe('VirtualSerial');
-    expect(info.firmware).toBe('5.0.1');
+    expect(info.model).toBe('MG-30');
+    expect(info.serialNumber).toBeUndefined();
+    expect(info.firmware).toBe('v6.0.5');
     expect(transport.sent.at(-1)).toEqual(Uint8Array.from([0xf0, 0x43, 0x58, 0, 0xf7]));
     await client.disconnect();
   });

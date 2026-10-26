@@ -2,7 +2,7 @@
 
 CLI e biblioteca TypeScript para a NUX MG-30 por USB MIDI. Permite consultar o aparelho, editar cenas, salvar presets e exportar/restaurar as três cenas de cada preset.
 
-A implementação foi revisada com análise estática do QuickTone 2.6.7.16 e testes com transporte MIDI simulado. A validação física desta revisão ainda está pendente; os testes não comprovam compatibilidade com todas as versões de firmware.
+A implementação foi revisada com análise estática do QuickTone 2.6.7.16, testes simulados e testes físicos em uma MG-30 com firmware v6.0.5. No aparelho foram confirmados estado, firmware, leituras, backup completo, troca de cena e edição temporária com restauração. Save e renomeação persistente também foram confirmados no slot autorizado 08C. Restauração de banco/importação no aparelho e outros firmwares ainda não foram validados.
 
 Requer Node.js 20 ou superior e o suporte MIDI nativo do sistema. No Linux, o módulo `@julusian/midi` precisa da biblioteca ALSA.
 

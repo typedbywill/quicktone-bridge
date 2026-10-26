@@ -34,7 +34,7 @@ describe('CLI → real client → protocol → virtual device → files integrat
     expect(f.transport.current).toEqual([before[0], before[1], expected]);
     expect(f.transport.savedScenes(17)).toEqual(original);
     expect(sceneSets(f.transport, 0x0b)).toHaveLength(0);
-    expect(sceneSets(f.transport, 0x0c)).toHaveLength(1);
+    expect(sceneSets(f.transport, 0x0c)).toHaveLength(3);
     expect(JSON.parse(f.log.mock.calls.at(-1)![0])).toMatchObject({ value: 80, saved: false });
     expect(f.transport.getIsConnected()).toBe(false);
 
@@ -144,10 +144,10 @@ describe('CLI → real client → protocol → virtual device → files integrat
 
   it('reports a failed write verification without saving the edit or claiming success', async () => {
     const f = fixture(), original = cloneBodies(f.transport.savedScenes(17));
-    f.transport.corruptNextReadback = true;
+    f.transport.persistentReadbackCorruption = true;
     expect(await f.run(['block', 'set', 'AMP', 'Gain', '80', '--save'])).toBe(1);
     expect(f.log).not.toHaveBeenCalled();
-    expect(JSON.parse(f.error.mock.calls.at(-1)![0]).error).toMatch(/failed write verification/);
+    expect(JSON.parse(f.error.mock.calls.at(-1)![0]).error).toMatch(/write verification failed/i);
     expect(f.transport.savedScenes(17)).toEqual(original);
     expect(sceneSets(f.transport, 0x0b)).toHaveLength(0);
     expect(f.transport.getIsConnected()).toBe(false);

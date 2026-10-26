@@ -86,5 +86,6 @@ segundo argumento de `15 01` como cena foram rejeitadas.
 
 Testes de integração executam a CLI, o cliente e os arquivos contra um
 simulador com buffers salvos/correntes distintos. Isso valida a lógica local;
-a compatibilidade física e as diferenças entre firmwares ainda precisam ser
-verificadas no aparelho.
+a sessão física com firmware v6.0.5 confirmou leitura, backup, troca de cena e
+edição/restauração temporária. Persistência e outros firmwares continuam
+pendentes; veja [HardwareValidation.md](HardwareValidation.md).

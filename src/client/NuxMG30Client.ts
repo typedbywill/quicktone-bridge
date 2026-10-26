@@ -120,6 +120,19 @@ export class NuxMG30Client {
     this.activePresetIndex = packet.payload[0]; this.activeSceneIndex = packet.payload[3]; this.stateKnown = true;
     return { preset: this.activePresetIndex, sceneIndex: this.activeSceneIndex, raw: packet.payload.slice() };
   }
+  private async waitForState(match: (state: DeviceState) => boolean): Promise<DeviceState> {
+    const deadline = Date.now() + (this.options.timeoutMs ?? 3000);
+    const generation = this.generation;
+    let state: DeviceState;
+    do {
+      if (generation !== this.generation) throw new Error('NUX operation cancelled by disconnect.');
+      state = await this.synchronize();
+      if (match(state)) return state;
+      if (Date.now() >= deadline) break;
+      await this.sleep(20);
+    } while (Date.now() < deadline);
+    return state!;
+  }
   public async ping(timeoutMs?: number): Promise<number> {
     const start = Date.now(); await this.synchronize(timeoutMs); this.emit('heartbeat'); return Date.now() - start;
   }
@@ -139,7 +152,7 @@ export class NuxMG30Client {
   public async loadPreset(preset: number | string): Promise<DeviceState> {
     const pc = this.presetNumber(preset);
     this.setPreset(pc);
-    const state = await this.synchronize();
+    const state = await this.waitForState(state => state.preset === pc);
     if (state.preset !== pc) throw new Error(`Preset change was not confirmed (requested ${pc}, device reports ${state.preset}).`);
     return state;
   }
@@ -157,7 +170,7 @@ export class NuxMG30Client {
     if (!this.stateKnown) await this.synchronize();
     const mapping = await this.exchange(SysExEncoder.buildSysExPacket(0x0f, 0), p => p.command === 0x0f && p.direction === 2 && p.payload.length >= 86);
     this.send(SysExEncoder.buildControlChange(mapping.payload[80], scene - 1));
-    const state = await this.synchronize();
+    const state = await this.waitForState(state => state.sceneIndex === scene - 1);
     if (state.sceneIndex !== scene - 1) throw new Error(`Scene ${scene} was not confirmed by the device.`);
   }
   public async requestPatchDump(timeoutMs = this.options.timeoutMs ?? 3000, sceneIndex = this.activeSceneIndex): Promise<PatchData> {
@@ -195,14 +208,31 @@ export class NuxMG30Client {
     if (!Array.isArray(data.scenes) || data.scenes.length !== 3) throw new Error('A preset must contain all three scenes.');
     data.scenes.forEach((scene, index) => { if (scene.scene !== index + 1) throw new Error('Preset scenes must be ordered 1, 2, 3.'); this.body(scene); });
   }
-  private async writeScene(pc: number, scene: number, body: Uint8Array, saved: boolean): Promise<PatchData> {
-    PatchDecoder.decode(body);
-    const encoded = packNuxPayload(body); const command = saved ? 0x0b : 0x0c;
-    const frame = saved ? SysExEncoder.buildSceneDataSet(pc, scene, encoded) : SysExEncoder.buildCurrentSceneDataSet(pc, scene, encoded);
-    await this.exchange(frame, p => p.command === command && p.direction === 3);
-    const result = saved ? await this.requestSavedScene(pc, scene) : await this.requestPatchDump(undefined, scene);
-    if (!this.equal(this.body(result), body)) throw new Error(`Scene ${scene + 1} in preset ${programChangeToPresetName(pc).name} failed write verification.`);
-    return result;
+  private async writeScenes(pc: number, bodies: Uint8Array[], saved: boolean): Promise<void> {
+    if (bodies.length !== 3) throw new Error('Writing requires all three scene bodies.');
+    bodies.forEach(body => PatchDecoder.decode(body));
+    const command = saved ? 0x0b : 0x0c;
+    // The device stages the frames; the third scene completes the transfer.
+    // Do not try to verify an individual scene before submitting all three.
+    for (let scene = 0; scene < 3; scene++) {
+      const encoded = packNuxPayload(bodies[scene]);
+      const frame = saved ? SysExEncoder.buildSceneDataSet(pc, scene, encoded) : SysExEncoder.buildCurrentSceneDataSet(pc, scene, encoded);
+      try { await this.exchange(frame, p => p.command === command && p.direction === 3); }
+      catch (error) { throw new Error(`Write stopped at ${programChangeToPresetName(pc).name}, scene ${scene + 1}; earlier scenes may already be saved. ${String(error)}`); }
+    }
+    const generation = this.generation;
+    for (let scene = 0; scene < 3; scene++) {
+      const deadline = Date.now() + (this.options.timeoutMs ?? 3000);
+      let matched = false;
+      do {
+        if (generation !== this.generation) throw new Error('NUX operation cancelled by disconnect.');
+        const result = saved ? await this.requestSavedScene(pc, scene) : await this.requestPatchDump(undefined, scene);
+        if (this.equal(this.body(result), bodies[scene])) { matched = true; break; }
+        if (Date.now() >= deadline) break;
+        await this.sleep(20);
+      } while (Date.now() < deadline);
+      if (!matched) throw new Error(`Write verification failed at ${programChangeToPresetName(pc).name}, scene ${scene + 1}; earlier scenes may already be saved.`);
+    }
   }
   private equal(a: Uint8Array, b: Uint8Array): boolean { return a.length === b.length && a.every((v, i) => v === b[i]); }
   public async writePreset(data: PresetData, destination: number | string = data.index): Promise<void> {
@@ -211,10 +241,7 @@ export class NuxMG30Client {
     return this.transaction(() => this.writePresetInternal(snapshot, pc));
   }
   private async writePresetInternal(data: PresetData, pc: number): Promise<void> {
-    for (let i = 0; i < 3; i++) {
-      try { await this.writeScene(pc, i, this.body(data.scenes[i]), true); }
-      catch (error) { throw new Error(`Write stopped at ${programChangeToPresetName(pc).name}, scene ${i + 1}; earlier scenes may already be saved. ${String(error)}`); }
-    }
+    await this.writeScenes(pc, data.scenes.map(scene => this.body(scene)), true);
     this.emit('patchSaved', { presetName: programChangeToPresetName(pc).name, index: pc });
   }
   public async savePatch(preset?: number | string): Promise<void> {
@@ -234,10 +261,11 @@ export class NuxMG30Client {
     return this.transaction(async () => {
       await this.synchronize();
       const pc = this.activePresetIndex, scene = this.activeSceneIndex;
-      const patch = await this.requestPatchDump(undefined, scene), body = this.body(patch);
+      const snapshot = await this.readPreset(pc, 'current');
+      const bodies = snapshot.scenes.map(patch => this.body(patch)), body = bodies[scene];
       mutator(body, { preset: pc, sceneIndex: scene });
       if (this.activePresetIndex !== pc || this.activeSceneIndex !== scene) throw new Error('Active preset or scene changed during editing; retry the operation.');
-      await this.writeScene(pc, scene, body, false);
+      await this.writeScenes(pc, bodies, false);
       if (options.settleMs) await this.sleep(integer(options.settleMs, 0, 10000, 'Settle time'));
       // `reload` remains accepted for API compatibility. Editing never reloads or persists.
     });
@@ -270,11 +298,12 @@ export class NuxMG30Client {
     return this.transaction(async () => {
       if (!this.stateKnown) await this.synchronize();
       const snapshot = await this.readPreset(this.activePresetIndex, 'current');
-      for (let i = 0; i < 3; i++) {
-        const body = this.body(snapshot.scenes[i]); body.fill(0, 106, 122);
+      const bodies = snapshot.scenes.map(patch => this.body(patch));
+      for (const body of bodies) {
+        body.fill(0, 106, 122);
         for (let j = 0; j < name.length; j++) body[106 + j] = name.charCodeAt(j);
-        await this.writeScene(snapshot.index, i, body, false);
       }
+      await this.writeScenes(snapshot.index, bodies, false);
     });
   }
   public async cloneScene(source: number, destination: number): Promise<void> {
@@ -282,16 +311,19 @@ export class NuxMG30Client {
     if (source === destination) throw new Error('Source and destination scene must differ.');
     return this.transaction(async () => {
       if (!this.stateKnown) await this.synchronize();
-      const patch = await this.requestPatchDump(undefined, source - 1);
-      await this.writeScene(this.activePresetIndex, destination - 1, this.body(patch), false);
+      const snapshot = await this.readPreset(this.activePresetIndex, 'current');
+      const bodies = snapshot.scenes.map(patch => this.body(patch));
+      bodies[destination - 1] = bodies[source - 1].slice();
+      await this.writeScenes(snapshot.index, bodies, false);
     });
   }
   public async resetScene(scene: number): Promise<void> {
     integer(scene, 1, 3, 'Scene');
     return this.transaction(async () => {
-      const patch = await this.requestPatchDump(undefined, scene - 1), body = this.body(patch);
+      const snapshot = await this.readPreset(this.activePresetIndex, 'current');
+      const bodies = snapshot.scenes.map(patch => this.body(patch)), body = bodies[scene - 1];
       for (const block of SCENE_DUMP_BLOCK_ORDER) if (block !== 'VOL') body[sceneModelOffset(block)] |= 0x40;
-      await this.writeScene(this.activePresetIndex, scene - 1, body, false);
+      await this.writeScenes(snapshot.index, bodies, false);
     });
   }
   public async clearPreset(preset?: number | string, options: { keepAmpCab?: boolean } = {}): Promise<void> {
@@ -321,7 +353,7 @@ export class NuxMG30Client {
     if (ids.length !== 12 || new Set(ids).size !== 12) throw new Error('Signal chain must contain each of the twelve blocks exactly once.');
     return this.transaction(async () => {
       const old = await this.requestSignalChain();
-      await this.exchange(SysExEncoder.buildSignalChainSet(ids, old.configuration), p => p.command === 0x0d && p.direction === 3);
+      await this.exchange(SysExEncoder.buildSignalChainSet(ids, old.configuration), p => p.command === 0x0d && (p.direction === 3 || (p.direction === 2 && p.payload.length === 13 && ids.every((id, index) => p.payload[index] === id))));
       const actual = await this.requestSignalChain();
       if (actual.blocks.some((b, i) => blockTypeToId(b) !== ids[i]) || actual.configuration !== old.configuration) throw new Error('Signal-chain update failed verification.');
     });
@@ -329,9 +361,9 @@ export class NuxMG30Client {
   public async requestDeviceInfo(): Promise<DeviceInfo> {
     const raw = await this.request(Uint8Array.from([0xf0, 0x43, 0x58, 0, 0xf7]), b => b.length === 45 && b[0] === 0xf0 && b[1] === 0x43 && b[2] === 0x58 && b[44] === 0xf7);
     const text = (bytes: Uint8Array) => Array.from(bytes).filter(b => b !== 0).map(b => String.fromCharCode(b)).join('').trim();
-    const firmware = text(raw.slice(36, 44)), serialNumber = text(raw.slice(4, 36));
-    if (!firmware || /[^\x20-\x7e]/.test(firmware + serialNumber)) throw new Error('Device info response contains an unsupported text encoding.');
-    return { firmware, serialNumber, raw: raw.slice() };
+    const firmware = text(raw.slice(4, 36)), model = text(raw.slice(36, 44));
+    if (!firmware || !model || /[^\x20-\x7e]/.test(firmware + model)) throw new Error('Device info response contains an unsupported text encoding.');
+    return { firmware, model, raw: raw.slice() };
   }
   public sendCC(cc: number, value: number): void { this.send(SysExEncoder.buildControlChange(cc, value)); }
   public listInputPorts() { return this.transport.listInputPorts(); }

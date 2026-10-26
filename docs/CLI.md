@@ -52,7 +52,7 @@ nux preset delete 02A --keep-amp-cab
 
 `delete` não reproduz um preset de fábrica: salva um estado de bypass nas três cenas. `preset rename`, `preset load` e `preset delete` podem fazer recall e substituir edições ainda não salvas no buffer corrente.
 
-Edições comuns modificam o buffer corrente por `0C`; não persistem automaticamente. `--save` nos comandos abaixo salva **as três cenas correntes**, inclusive outras edições já existentes. Cada gravação aguarda ACK e leitura de volta; sucesso exige comparar o corpo inteiro. Uma falha pode ocorrer depois de uma cena já ter sido salva.
+Edições comuns modificam o buffer corrente por `0C`; não persistem automaticamente. `--save` nos comandos abaixo salva **as três cenas correntes**, inclusive outras edições já existentes. As transferências enviam as três cenas completas antes da leitura de volta; no firmware v6.0.5, uma cena isolada recebe ACK mas não aplica a edição. Sucesso exige comparar todos os corpos. Uma falha pode ocorrer depois de uma cena já ter sido salva.
 
 ## Cenas, efeitos e parâmetros
 
@@ -127,4 +127,4 @@ A CLI valida o arquivo inteiro antes de conectar. `--dry-run` valida sem MIDI; `
 
 `npm test` exercita protocolo, transportes, CLI e dispositivo virtual; `npm run build` produz os binários e tipos. No ambiente Nix, use `nix-shell --run 'npm test'`.
 
-A validação em uma MG-30 física ainda está pendente. Comece por `ports`, `doctor`, `ping`, `sync` e uma exportação de leitura; os testes simulados não confirmam tempos de resposta, variações de firmware ou disponibilidade das portas no seu sistema. Evidências estáticas e limites estão em [QuickTone.md](QuickTone.md).
+Em 26/10/2026 foram confirmados em uma MG-30 v6.0.5: estado, firmware, leitura das três cenas, backup dos 128 presets, troca de cena e edição temporária de ganho, seguida de restauração byte a byte. Não houve comandos de persistência `0B 01`; gravação permanente/restauração física e outros firmwares continuam pendentes. Evidências estáticas e limites estão em [QuickTone.md](QuickTone.md).

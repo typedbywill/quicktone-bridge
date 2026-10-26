@@ -4,10 +4,10 @@ A edição usa leitura, alteração e gravação do **buffer corrente**, sem sal
 
 1. Consulta estado real (`15 00`) e cena corrente (`0C 00`).
 2. Desempacota os 213 bytes em um corpo de 142 bytes.
-3. Modifica somente o byte necessário, preservando os demais.
-4. Envia `0C 01`, aguarda `0C 03` e lê novamente a cena para comparar o corpo inteiro.
+3. Lê e preserva as três cenas; modifica somente o byte necessário na cena desejada.
+4. Envia as três cenas por `0C 01`, em ordem 0, 1, 2, aguardando cada `0C 03`. Só então lê e compara os três corpos. No firmware v6.0.5, enviar uma cena isolada recebe ACK mas não aplica a edição.
 
-`preset save` lê as três cenas correntes, grava cada cena salva com `0B 01` (222 bytes por frame), aguarda `0B 03` e verifica via `0B 00`. `--save` solicita essa persistência depois da edição.
+`preset save` lê as três cenas correntes, envia as três cenas com `0B 01` (222 bytes por frame), aguardando cada `0B 03`, e depois verifica as três via `0B 00`. `--save` solicita essa persistência depois da edição.
 
 ```bash
 nux block params AMP

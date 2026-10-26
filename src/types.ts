@@ -123,7 +123,7 @@ export interface NuxClientEvents {
 
 /** Live device state returned by command 15. Indices are zero based. */
 export interface DeviceState { preset: number; sceneIndex: number; raw: Uint8Array; }
-export interface DeviceInfo { firmware: string; serialNumber: string; raw: Uint8Array; }
+export interface DeviceInfo { firmware: string; model: string; serialNumber?: string; raw: Uint8Array; }
 /** Complete preset: every scene, including opaque fields retained in raw. */
 export interface PresetData { index: number; scenes: [PatchData, PatchData, PatchData]; }
 export interface SignalChain { blocks: BlockType[]; configuration: number; }

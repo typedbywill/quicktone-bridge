@@ -13,7 +13,7 @@ A investigação usa o PE x86 distribuído em `refs/NUX_QuickTone_V2.6.7.16_Wind
 | Cadeia | `0D 00` / `0D 01`; 12 IDs e um byte de configuração preservado |
 | Selecionar preset | Program Change, seguido de consulta de estado |
 | Selecionar cena | Consulta `0F 00`; CC indicado no mapa Custom MIDI[80], valor 0/1/2; confirma via `15 00` |
-| Informações | Query de 5 bytes `F0 43 58 00 F7`; resposta de 45 bytes, serial[4:36], firmware[36:44] |
+| Informações | Query de 5 bytes `F0 43 58 00 F7`; resposta de 45 bytes, firmware[4:36], modelo[36:44] |
 
 Índices acima se referem ao payload depois dos seis bytes de cabeçalho, exceto os offsets da resposta de informações, que se referem ao frame inteiro. Os demais campos da resposta de estado continuam opacos.
 
@@ -25,4 +25,4 @@ A operação `15 01` recebe dois argumentos, mas não há base para chamar o seg
 
 Os relatórios individuais do Antigravity contêm hipóteses que não foram todas confirmadas. Os resultados foram revisados contra as instruções e callbacks; o material bruto permanece em `analysis/quicktone-2.6.7.16/`. Os testes normais excluem os testes antigos de investigação, que reproduziam bugs anteriores à correção.
 
-Os testes com dispositivo virtual verificam a lógica do cliente, frames, persistência de três cenas, preservação de bytes, fila, timeouts e erros parciais. Ainda é necessário confrontar essas operações com capturas de uma MG-30 física e seu firmware. Não foram implementados upload de amostras IR, atualização de firmware, reboot, configurações globais ou leitura/gravação do formato nativo `.mg30patch`.
+Os testes com dispositivo virtual verificam a lógica do cliente, frames, persistência de três cenas, preservação de bytes, fila, timeouts e erros parciais. O teste físico de 26/10/2026 na MG-30 v6.0.5 confirmou que `0C 01` precisa das três cenas em ordem para aplicar a edição. O ACK da terceira cena retornou índice 0; esse campo não é usado como identificador de transação. A seleção por CC pode responder com estado anterior por alguns milissegundos, exigindo consultas limitadas pelo timeout. A resposta de informações traz firmware nos primeiros 32 bytes de texto e modelo nos últimos 8; não é número de série. Leituras, backup completo, troca de cena e edição/restauração temporária foram comprovados; persistência `0B 01` e restauração física continuam pendentes. Não foram implementados upload de amostras IR, atualização de firmware, reboot, configurações globais ou leitura/gravação do formato nativo `.mg30patch`.
